@@ -27,7 +27,7 @@ TCP_PORT: int = int(os.environ.get("TCP_PORT", "9000"))
 WATCHDOG_TIMEOUT: float = float(os.environ.get("WATCHDOG_TIMEOUT", "2.0"))
 
 # ── Allowed command characters (serial whitelist) ──────────
-ALLOWED_COMMANDS: set = {"w", "s", "a", "d", " "}
+ALLOWED_COMMANDS: set = {"w", "s", "a", "d", " ", "\r"}
 HEARTBEAT_CHAR: str = "H"
 
 # ── OAK-D PoE camera addresses ────────────────────────────

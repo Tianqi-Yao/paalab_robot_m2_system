@@ -9,6 +9,7 @@ Usage:
 Controls:
     w / s / a / d  - forward / backward / turn left / turn right
     space          - emergency stop (also sent automatically when all keys are released)
+    Enter          - toggle STATE_AUTO_READY <-> STATE_AUTO_ACTIVE (sent once, no repeat)
     q              - quit
 """
 
@@ -137,6 +138,11 @@ class RemoteSender:
             self._running = False
             return
 
+        if char == "\r":
+            logger.info("Enter key pressed -> sending state toggle command")
+            self._send("\r")
+            return
+
         if char in CONTROL_KEYS:
             send_char = CONTROL_KEYS[char]
             with self._keys_lock:
@@ -174,6 +180,9 @@ class RemoteSender:
             # Space key
             if key == keyboard.Key.space:
                 return " "
+            # Enter key
+            if key == keyboard.Key.enter:
+                return "\r"
         except AttributeError:
             pass
         return None
@@ -196,7 +205,7 @@ class RemoteSender:
         )
         self._repeat_thread.start()
 
-        logger.info("Keyboard listener started (wasd to move, space to stop, q to quit)")
+        logger.info("Keyboard listener started (wasd to move, space to stop, Enter to toggle state, q to quit)")
         logger.info(f"Target: {ROBOT_HOST}:{ROBOT_PORT}")
 
         # pynput listener (blocks until _running=False or exception)

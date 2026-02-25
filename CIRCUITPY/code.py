@@ -50,6 +50,9 @@ class HelloMainLoopApp:
 
     def parse_wasd_cmd(self, char):
         if char == " ":
+            self.cmd_speed = 0.0
+            self.cmd_ang_rate = 0.0
+        elif char == "\r":
             if self.request_state == AmigaControlState.STATE_AUTO_READY:
                 self.request_state = AmigaControlState.STATE_AUTO_ACTIVE
             else:

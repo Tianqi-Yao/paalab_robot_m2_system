@@ -107,19 +107,19 @@ def _build_pipeline() -> dai.Pipeline:
     """Build a depthai Pipeline: ColorCamera -> VideoEncoder(MJPEG) -> XLinkOut."""
     pipeline = dai.Pipeline()
 
-    cam = pipeline.create(dai.node.ColorCamera)
+    cam = pipeline.createColorCamera()
     cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
     cam.setFps(CAM_FPS)
     cam.setInterleaved(False)
 
-    encoder = pipeline.create(dai.node.VideoEncoder)
+    encoder = pipeline.createVideoEncoder()
     encoder.setDefaultProfilePreset(
         CAM_FPS,
         dai.VideoEncoderProperties.Profile.MJPEG,
     )
     encoder.setQuality(MJPEG_QUALITY)
 
-    xout = pipeline.create(dai.node.XLinkOut)
+    xout = pipeline.createXLinkOut()
     xout.setStreamName("mjpeg")
 
     cam.video.link(encoder.input)

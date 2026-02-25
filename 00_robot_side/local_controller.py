@@ -10,6 +10,7 @@ Usage:
 Controls:
     w / s / a / d  - forward / backward / turn left / turn right
     space          - emergency stop (also sent automatically when all keys released)
+    Enter          - toggle STATE_AUTO_READY <-> STATE_AUTO_ACTIVE (sent once, no repeat)
     q              - quit
 
 Note:
@@ -117,6 +118,11 @@ class LocalController:
             self._running = False
             return
 
+        if char == "\r":
+            logger.info("Enter key pressed -> sending state toggle command")
+            self._send("\r")
+            return
+
         if char in CONTROL_KEYS:
             send_char = CONTROL_KEYS[char]
             with self._keys_lock:
@@ -152,6 +158,8 @@ class LocalController:
                 return key.char
             if key == keyboard.Key.space:
                 return " "
+            if key == keyboard.Key.enter:
+                return "\r"
         except AttributeError:
             pass
         return None
@@ -169,7 +177,7 @@ class LocalController:
         )
         self._repeat_thread.start()
 
-        logger.info("Local controller started (wasd to move, space to stop, q to quit)")
+        logger.info("Local controller started (wasd to move, space to stop, Enter to toggle state, q to quit)")
         logger.info(f"Serial port: {FEATHER_PORT}")
         logger.info("NOTE: Do NOT start robot_receiver.py at the same time (serial port conflict)")
 
