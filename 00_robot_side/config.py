@@ -30,19 +30,19 @@ WATCHDOG_TIMEOUT: float = float(os.environ.get("WATCHDOG_TIMEOUT", "2.0"))
 ALLOWED_COMMANDS: set = {"w", "s", "a", "d", " "}
 HEARTBEAT_CHAR: str = "H"
 
-# ── OAK-D PoE 相机配置 ────────────────────────────────────
+# ── OAK-D PoE camera addresses ────────────────────────────
 CAM1_IP: str = os.environ.get("CAM1_IP", "192.168.1.101")
 CAM2_IP: str = os.environ.get("CAM2_IP", "192.168.1.102")
 
-# ── MJPEG HTTP 流端口 ─────────────────────────────────────
+# ── MJPEG HTTP stream ports ────────────────────────────────
 CAM1_STREAM_PORT: int = int(os.environ.get("CAM1_STREAM_PORT", "8080"))
 CAM2_STREAM_PORT: int = int(os.environ.get("CAM2_STREAM_PORT", "8081"))
 
-# ── 相机参数 ──────────────────────────────────────────────
+# ── Camera parameters ─────────────────────────────────────
 CAM_FPS: int       = int(os.environ.get("CAM_FPS", "30"))
 CAM_WIDTH: int     = int(os.environ.get("CAM_WIDTH", "1280"))
 CAM_HEIGHT: int    = int(os.environ.get("CAM_HEIGHT", "720"))
 MJPEG_QUALITY: int = int(os.environ.get("MJPEG_QUALITY", "80"))  # 1-100
 
-# ── 本地预览开关 ──────────────────────────────────────────
+# ── Local preview toggle ──────────────────────────────────
 LOCAL_DISPLAY: bool = os.environ.get("LOCAL_DISPLAY", "0") == "1"

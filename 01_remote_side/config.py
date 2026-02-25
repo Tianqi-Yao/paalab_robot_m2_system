@@ -27,6 +27,6 @@ STOP_CHAR: str = " "       # emergency stop character
 HEARTBEAT_CHAR: str = "H"  # heartbeat character
 QUIT_KEY: str = "q"        # quit key
 
-# ── 相机流地址 ─────────────────────────────────────────────
+# ── Camera stream URLs ─────────────────────────────────────
 CAM1_URL: str = os.environ.get("CAM1_URL", f"http://{ROBOT_HOST}:8080")
 CAM2_URL: str = os.environ.get("CAM2_URL", f"http://{ROBOT_HOST}:8081")

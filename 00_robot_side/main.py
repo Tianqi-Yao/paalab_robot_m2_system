@@ -6,10 +6,10 @@ Usage:
     python main.py
 
 Scenarios:
-    1. 本地控制（仅串口）      - local_controller.py
-    2. 本地控制 + 相机流       - local_controller.py + camera_streamer.py
-    3. 远程 TCP 控制           - robot_receiver.py
-    4. 远程 TCP + 相机流       - robot_receiver.py  + camera_streamer.py
+    1. Local control (serial only)      - local_controller.py
+    2. Local control + camera stream    - local_controller.py + camera_streamer.py
+    3. Remote TCP control               - robot_receiver.py
+    4. Remote TCP + camera stream       - robot_receiver.py  + camera_streamer.py
 """
 
 import logging
@@ -35,19 +35,19 @@ logger = logging.getLogger(__name__)
 # ── Menu definition ────────────────────────────────────────
 MENU = {
     "1": {
-        "label": "本地控制（仅串口）",
+        "label": "Local control (serial only)",
         "scripts": ["local_controller.py"],
     },
     "2": {
-        "label": "本地控制 + 相机流",
+        "label": "Local control + camera stream",
         "scripts": ["local_controller.py", "camera_streamer.py"],
     },
     "3": {
-        "label": "远程 TCP 控制",
+        "label": "Remote TCP control",
         "scripts": ["robot_receiver.py"],
     },
     "4": {
-        "label": "远程 TCP + 相机流",
+        "label": "Remote TCP + camera stream",
         "scripts": ["robot_receiver.py", "camera_streamer.py"],
     },
 }
@@ -56,12 +56,12 @@ MENU = {
 def print_menu() -> None:
     print()
     print("=" * 40)
-    print("   Farm Robot — 机器人端启动器")
+    print("   Farm Robot — Robot-side Launcher")
     print("=" * 40)
     for key, item in MENU.items():
         print(f"  {key}. {item['label']}")
     print()
-    print("  q. 退出")
+    print("  q. Quit")
     print("=" * 40)
 
 
@@ -132,7 +132,7 @@ def main() -> None:
 
     while True:
         try:
-            choice = input("请选择 [1-4 / q]: ").strip().lower()
+            choice = input("Select [1-4 / q]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             logger.info("Launcher exiting")
@@ -143,12 +143,12 @@ def main() -> None:
             sys.exit(0)
 
         if choice not in MENU:
-            print(f"  无效选项 '{choice}'，请输入 1-4 或 q")
+            print(f"  Invalid option '{choice}', enter 1-4 or q")
             continue
 
         item = MENU[choice]
         logger.info(f"Selected: [{choice}] {item['label']}")
-        print(f"\n>>> 启动：{item['label']}\n")
+        print(f"\n>>> Starting: {item['label']}\n")
 
         try:
             run_scripts(item["scripts"])

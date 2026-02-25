@@ -6,9 +6,9 @@ Usage:
     python main.py
 
 Scenarios:
-    1. 仅键盘控制       - remote_sender.py
-    2. 键盘控制 + 相机  - remote_sender.py + camera_viewer.py
-    3. 仅看相机         - camera_viewer.py
+    1. Keyboard control only        - remote_sender.py
+    2. Keyboard control + camera    - remote_sender.py + camera_viewer.py
+    3. Camera view only             - camera_viewer.py
 """
 
 import logging
@@ -34,15 +34,15 @@ logger = logging.getLogger(__name__)
 # ── Menu definition ────────────────────────────────────────
 MENU = {
     "1": {
-        "label": "仅键盘控制",
+        "label": "Keyboard control only",
         "scripts": ["remote_sender.py"],
     },
     "2": {
-        "label": "键盘控制 + 相机画面",
+        "label": "Keyboard control + camera view",
         "scripts": ["remote_sender.py", "camera_viewer.py"],
     },
     "3": {
-        "label": "仅看相机",
+        "label": "Camera view only",
         "scripts": ["camera_viewer.py"],
     },
 }
@@ -51,12 +51,12 @@ MENU = {
 def print_menu() -> None:
     print()
     print("=" * 40)
-    print("   Farm Robot — 远程端启动器")
+    print("   Farm Robot — Remote-side Launcher")
     print("=" * 40)
     for key, item in MENU.items():
         print(f"  {key}. {item['label']}")
     print()
-    print("  q. 退出")
+    print("  q. Quit")
     print("=" * 40)
 
 
@@ -124,7 +124,7 @@ def main() -> None:
 
     while True:
         try:
-            choice = input("请选择 [1-3 / q]: ").strip().lower()
+            choice = input("Select [1-3 / q]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             logger.info("Launcher exiting")
@@ -135,12 +135,12 @@ def main() -> None:
             sys.exit(0)
 
         if choice not in MENU:
-            print(f"  无效选项 '{choice}'，请输入 1-3 或 q")
+            print(f"  Invalid option '{choice}', enter 1-3 or q")
             continue
 
         item = MENU[choice]
         logger.info(f"Selected: [{choice}] {item['label']}")
-        print(f"\n>>> 启动：{item['label']}\n")
+        print(f"\n>>> Starting: {item['label']}\n")
 
         try:
             run_scripts(item["scripts"])
