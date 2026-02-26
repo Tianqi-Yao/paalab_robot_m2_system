@@ -1,48 +1,49 @@
 """
-Robot-side OAK-D PoE camera streamer.
-Captures MJPEG frames from two OAK-D W PoE cameras and serves them
-as MJPEG-over-HTTP streams for remote viewing.
+MJPEG-over-HTTP camera streaming server for the robot side.
 
-Usage:
-    export CAM1_IP=192.168.1.101
-    export CAM2_IP=192.168.1.102
-    export LOCAL_DISPLAY=1   # optional: show preview on Mac Mini
+Exposes one MJPEG stream per configured camera via HTTP.
+Any FrameSource implementation can be swapped in — the server itself
+never changes.
+
+Usage (standalone):
+    export CAM1_IP=10.95.76.10        # optional, for OAK-D PoE
+    export LOCAL_DISPLAY=1            # show local preview window
     cd m2_system/00_robot_side
     python camera_streamer.py
 
-Streams:
-    Camera 1: http://<mac-mini-ip>:8080
-    Camera 2: http://<mac-mini-ip>:8081
+Endpoints (default ports):
+    http://0.0.0.0:8080/   ->  CAM1 MJPEG stream
+    http://0.0.0.0:8081/   ->  CAM2 MJPEG stream  (set CAM2_ENABLED=1)
 
-Notes:
-    - OAK-D VPU handles MJPEG encoding (low CPU load on Mac Mini)
-    - Uses latest-frame strategy: skips stale frames, avoids latency buildup
-    - LOCAL_DISPLAY=1 requires macOS (cv2.imshow must run on main thread)
-    - Runs independently of robot_receiver.py and local_controller.py
+To swap the pipeline (no other code changes needed):
+    from frame_source import YOLODetectionSource
+    server = MJPEGServer(source=YOLODetectionSource(), port=8080)
+    server.start()
 """
 
 import logging
+import os
 import signal
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Optional
 
 import cv2
-import depthai as dai
 
 from config import (
     CAM1_IP,
     CAM1_STREAM_PORT,
     CAM2_IP,
     CAM2_STREAM_PORT,
-    CAM_FPS,
     LOCAL_DISPLAY,
     MJPEG_QUALITY,
 )
+from frame_source import FrameSource, SimpleColorSource
 
-# ── Logging configuration ──────────────────────────────────
+# ── Logging ────────────────────────────────────────────────────────────────
 _py_name = Path(__file__).stem
 Path("log").mkdir(exist_ok=True)
 logging.basicConfig(
@@ -56,276 +57,203 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── MJPEG HTTP handler ─────────────────────────────────────
+# ── MJPEGServer ────────────────────────────────────────────────────────────
 
-class MJPEGHandler(BaseHTTPRequestHandler):
-    """HTTP handler that serves a continuous MJPEG stream."""
+class MJPEGServer:
+    """MJPEG-over-HTTP server that wraps a FrameSource.
 
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
+    Always serves the *latest* available frame (no frame queue buildup).
+    The HTTP server and the capture loop each run in their own daemon threads.
 
-        logger.info(f"[HTTP] Client connected: {self.client_address}")
-        try:
-            while True:
-                with self.server.frame_lock:
-                    frame = self.server.latest_frame
-
-                if frame is not None:
-                    try:
-                        self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n\r\n")
-                        self.wfile.write(frame)
-                        self.wfile.write(b"\r\n")
-                    except (BrokenPipeError, ConnectionResetError):
-                        logger.info(f"[HTTP] Client disconnected: {self.client_address}")
-                        break
-
-                time.sleep(1.0 / CAM_FPS)
-
-        except Exception as e:
-            logger.error(f"[HTTP] Stream error for {self.client_address}: {e}")
-
-    def log_message(self, format, *args):
-        # Suppress default HTTP access logs (already logged above)
-        pass
-
-
-class FrameHTTPServer(ThreadingHTTPServer):
-    """ThreadingHTTPServer that carries the shared latest_frame and lock."""
-
-    def __init__(self, server_address, RequestHandlerClass):
-        super().__init__(server_address, RequestHandlerClass)
-        self.latest_frame: bytes | None = None
-        self.frame_lock = threading.Lock()
-
-
-# ── Camera capture thread ──────────────────────────────────
-
-def _build_pipeline() -> dai.Pipeline:
-    """Build a depthai Pipeline: ColorCamera -> VideoEncoder(MJPEG) -> XLinkOut."""
-    pipeline = dai.Pipeline()
-
-    cam = pipeline.createColorCamera()
-    cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
-    cam.setFps(CAM_FPS)
-    cam.setInterleaved(False)
-
-    encoder = pipeline.createVideoEncoder()
-    encoder.setDefaultProfilePreset(
-        CAM_FPS,
-        dai.VideoEncoderProperties.Profile.MJPEG,
-    )
-    encoder.setQuality(MJPEG_QUALITY)
-
-    xout = pipeline.createXLinkOut()
-    xout.setStreamName("mjpeg")
-
-    cam.video.link(encoder.input)
-    encoder.bitstream.link(xout.input)
-
-    return pipeline
-
-
-def _cam_thread(
-    cam_label: str,
-    cam_ip: str,
-    http_server: FrameHTTPServer,
-    stop_event: threading.Event,
-) -> None:
-    """
-    Camera capture thread.
-    Connects to an OAK-D PoE camera, grabs MJPEG frames, updates http_server.latest_frame.
-    Retries with exponential backoff on failure.
-    """
-    retry_delay = 2.0
-    max_retry_delay = 30.0
-
-    while not stop_event.is_set():
-        logger.info(f"[{cam_label}] Connecting to camera at {cam_ip}...")
-        try:
-            pipeline = _build_pipeline()
-            device_info = dai.DeviceInfo(cam_ip)
-
-            with dai.Device(pipeline, device_info) as device:
-                logger.info(f"[{cam_label}] Camera connected: {cam_ip}")
-                retry_delay = 2.0  # reset on successful connect
-
-                q = device.getOutputQueue(name="mjpeg", maxSize=1, blocking=False)
-
-                while not stop_event.is_set():
-                    try:
-                        pkt = q.tryGet()
-                        if pkt is not None:
-                            frame_bytes = bytes(pkt.getData())
-                            with http_server.frame_lock:
-                                http_server.latest_frame = frame_bytes
-                    except Exception as e:
-                        logger.error(f"[{cam_label}] Frame read error: {e}")
-                        break
-
-                    time.sleep(0.001)  # yield to other threads
-
-        except Exception as e:
-            if stop_event.is_set():
-                break
-            logger.error(f"[{cam_label}] Camera connection failed: {e}. Retrying in {retry_delay:.0f}s...")
-            time.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, max_retry_delay)
-
-    logger.info(f"[{cam_label}] Camera thread exiting")
-
-
-# ── Main CameraStreamer class ──────────────────────────────
-
-class CameraStreamer:
-    """
-    Manages two OAK-D camera capture threads and two MJPEG HTTP server threads.
-    Optionally shows local preview on main thread (required for macOS).
+    Args:
+        source:  Any FrameSource implementation.
+        port:    TCP port to listen on.
+        quality: JPEG encoding quality (1–100).
     """
 
-    def __init__(self) -> None:
-        self._stop_event = threading.Event()
-
-        # HTTP servers (created in run())
-        self._server1: FrameHTTPServer | None = None
-        self._server2: FrameHTTPServer | None = None
-
-        # Background threads
-        self._threads: list[threading.Thread] = []
-
-    def _start_http_server(
+    def __init__(
         self,
+        source: FrameSource,
         port: int,
-        label: str,
-    ) -> FrameHTTPServer:
-        """Create and start a FrameHTTPServer in a daemon thread."""
-        server = FrameHTTPServer(("0.0.0.0", port), MJPEGHandler)
-        t = threading.Thread(
-            target=server.serve_forever,
-            daemon=True,
-            name=f"http_{label}",
-        )
-        t.start()
-        self._threads.append(t)
-        logger.info(f"[{label}] MJPEG HTTP server started on port {port}")
-        return server
-
-    def _start_cam_thread(
-        self,
-        label: str,
-        cam_ip: str,
-        http_server: FrameHTTPServer,
+        quality: int = MJPEG_QUALITY,
     ) -> None:
-        """Start a camera capture thread."""
-        t = threading.Thread(
-            target=_cam_thread,
-            args=(label, cam_ip, http_server, self._stop_event),
+        self._source = source
+        self._port = port
+        self._quality = quality
+
+        self._latest_jpeg: Optional[bytes] = None
+        self._frame_lock = threading.Lock()
+
+        self._http_server: Optional[ThreadingHTTPServer] = None
+        self._server_thread: Optional[threading.Thread] = None
+        self._capture_thread: Optional[threading.Thread] = None
+        self._running = False
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        """Open the FrameSource and start the capture + HTTP threads."""
+        self._source.open()
+        self._running = True
+
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop,
             daemon=True,
-            name=f"cam_{label}",
+            name=f"capture-{self._port}",
         )
-        t.start()
-        self._threads.append(t)
+        self._capture_thread.start()
 
-    def run(self) -> None:
-        """Start all threads; optionally run local preview on main thread."""
-        # Start HTTP servers
-        self._server1 = self._start_http_server(CAM1_STREAM_PORT, "CAM1")
-        self._server2 = self._start_http_server(CAM2_STREAM_PORT, "CAM2")
+        # Build handler class with a reference back to this MJPEGServer.
+        server_ref = self
 
-        # Start camera capture threads
-        self._start_cam_thread("CAM1", CAM1_IP, self._server1)
-        self._start_cam_thread("CAM2", CAM2_IP, self._server2)
+        class _Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                server_ref._handle_http(self)
 
-        logger.info(f"Camera streamer running. Streams:")
-        logger.info(f"  CAM1: http://0.0.0.0:{CAM1_STREAM_PORT}  (source: {CAM1_IP})")
-        logger.info(f"  CAM2: http://0.0.0.0:{CAM2_STREAM_PORT}  (source: {CAM2_IP})")
-
-        if LOCAL_DISPLAY:
-            self._local_display_loop()
-        else:
-            logger.info("Local display disabled. Press Ctrl+C to stop.")
-            try:
-                self._stop_event.wait()
-            except KeyboardInterrupt:
+            def log_message(self, fmt, *args):  # suppress default access log
                 pass
 
-    def _local_display_loop(self) -> None:
-        """
-        Show local preview with cv2.imshow (must run on main thread on macOS).
-        Press 'q' in the OpenCV window to quit.
-        """
-        logger.info("Local display enabled. Press 'q' in the preview window to quit.")
-        while not self._stop_event.is_set():
-            frames = []
+        self._http_server = ThreadingHTTPServer(("0.0.0.0", self._port), _Handler)
+        self._server_thread = threading.Thread(
+            target=self._http_server.serve_forever,
+            daemon=True,
+            name=f"mjpeg-{self._port}",
+        )
+        self._server_thread.start()
+        logger.info(f"MJPEG server started → http://0.0.0.0:{self._port}/")
 
-            with self._server1.frame_lock:
-                raw1 = self._server1.latest_frame
-            with self._server2.frame_lock:
-                raw2 = self._server2.latest_frame
+    def stop(self) -> None:
+        """Stop the HTTP server and release the FrameSource."""
+        self._running = False
+        if self._http_server:
+            try:
+                self._http_server.shutdown()
+            except Exception as e:
+                logger.warning(f"Error shutting down HTTP server (port {self._port}): {e}")
+        try:
+            self._source.close()
+        except Exception as e:
+            logger.warning(f"Error closing frame source (port {self._port}): {e}")
+        logger.info(f"MJPEG server stopped (port {self._port})")
 
-            for label, raw in [("CAM1", raw1), ("CAM2", raw2)]:
-                if raw is not None:
-                    try:
-                        import numpy as np
-                        arr = np.frombuffer(raw, dtype=np.uint8)
-                        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                        if img is not None:
-                            frames.append((label, img))
-                    except Exception as e:
-                        logger.warning(f"[{label}] Preview decode error: {e}")
+    def get_latest_frame(self):
+        """Return the latest BGR numpy frame (for local display). May be None."""
+        # Re-decode from JPEG is wasteful; grab directly from capture loop instead.
+        # Subclasses may override this if they cache the raw frame.
+        return None  # local preview fetches directly from source
 
-            for label, img in frames:
-                cv2.imshow(f"Local Preview - {label}", img)
+    # ── Internal ────────────────────────────────────────────────────────────
 
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                logger.info("'q' pressed in preview window, stopping...")
-                self._stop_event.set()
-                break
+    def _capture_loop(self) -> None:
+        logger.info(f"Capture loop running (port {self._port})")
+        while self._running:
+            frame = self._source.get_frame()
+            if frame is not None:
+                ok, buf = cv2.imencode(
+                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self._quality]
+                )
+                if ok:
+                    with self._frame_lock:
+                        self._latest_jpeg = buf.tobytes()
+            else:
+                time.sleep(0.001)
 
-            time.sleep(0.01)
+    def _handle_http(self, handler: BaseHTTPRequestHandler) -> None:
+        """Serve a single MJPEG streaming response."""
+        if handler.path not in ("/", "/stream"):
+            handler.send_error(404, "Not Found")
+            return
 
-        cv2.destroyAllWindows()
+        handler.send_response(200)
+        handler.send_header(
+            "Content-Type", "multipart/x-mixed-replace; boundary=frame"
+        )
+        handler.send_header("Cache-Control", "no-cache")
+        handler.end_headers()
 
-    def shutdown(self) -> None:
-        """Signal all threads to stop and shut down HTTP servers."""
-        logger.info("Shutting down camera streamer...")
-        self._stop_event.set()
+        try:
+            while self._running:
+                with self._frame_lock:
+                    jpeg = self._latest_jpeg
 
-        if self._server1:
-            self._server1.shutdown()
-        if self._server2:
-            self._server2.shutdown()
+                if jpeg is None:
+                    time.sleep(0.01)
+                    continue
 
-        for t in self._threads:
-            if t.is_alive():
-                t.join(timeout=3.0)
+                try:
+                    handler.wfile.write(
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n"
+                        + jpeg
+                        + b"\r\n"
+                    )
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    break  # client disconnected — normal, not an error
 
-        logger.info("Camera streamer shut down")
+                time.sleep(0.001)  # yield CPU; frame rate is limited by capture loop
+
+        except Exception as e:
+            logger.warning(f"Streaming error (port {self._port}): {e}")
 
 
-# ── Entry point ─────────────────────────────────────────────
+# ── Standalone entry point ─────────────────────────────────────────────────
 
 def main() -> None:
-    streamer = CameraStreamer()
+    dual_cam: bool = os.environ.get("CAM2_ENABLED", "0") == "1"
 
-    def _signal_handler(signum, frame):
-        logger.info(f"Signal {signum} received, starting graceful shutdown...")
-        streamer.shutdown()
+    servers: list[tuple[MJPEGServer, SimpleColorSource]] = []
+
+    # CAM1 (always active)
+    src1 = SimpleColorSource(device_ip=CAM1_IP)
+    srv1 = MJPEGServer(source=src1, port=CAM1_STREAM_PORT)
+    servers.append((srv1, src1))
+
+    if dual_cam:
+        src2 = SimpleColorSource(device_ip=CAM2_IP)
+        srv2 = MJPEGServer(source=src2, port=CAM2_STREAM_PORT)
+        servers.append((srv2, src2))
+
+    # Start all servers
+    for srv, _ in servers:
+        try:
+            srv.start()
+        except Exception as e:
+            logger.error(f"Failed to start server: {e}")
+            for s, _ in servers:
+                s.stop()
+            sys.exit(1)
+
+    def _shutdown(signum=None, frame=None) -> None:
+        logger.info("Shutdown signal received, stopping servers...")
+        for s, _ in servers:
+            s.stop()
         sys.exit(0)
 
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
 
-    try:
-        streamer.run()
-    except Exception as e:
-        logger.error(f"Camera streamer encountered an error: {e}")
-        raise
-    finally:
-        streamer.shutdown()
+    ports = ", ".join(str(CAM1_STREAM_PORT) if i == 0 else str(CAM2_STREAM_PORT)
+                      for i in range(len(servers)))
+    logger.info(f"Streaming on port(s): {ports} — press Ctrl+C to stop")
+
+    # Optional local preview (macOS: must be on main thread)
+    if LOCAL_DISPLAY:
+        logger.info("Local display enabled (LOCAL_DISPLAY=1)")
+        while True:
+            frame = src1.get_frame()
+            if frame is not None:
+                cv2.imshow("CAM1 local preview", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                logger.info("Local display: 'q' pressed, stopping")
+                _shutdown()
+    else:
+        # Just keep the main thread alive
+        try:
+            while True:
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            _shutdown()
 
 
 if __name__ == "__main__":

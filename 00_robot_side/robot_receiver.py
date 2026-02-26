@@ -50,8 +50,6 @@ class RobotReceiver:
         self._server_sock: socket.socket | None = None
         self._running = False
 
-    # ── Initialization ─────────────────────────────────────
-
     def setup(self) -> None:
         """Open the serial port and create the TCP server socket."""
         self._serial.open()
@@ -61,8 +59,6 @@ class RobotReceiver:
         self._server_sock.listen(1)   # single-connection mode
         logger.info(f"TCP server started, listening on {TCP_HOST}:{TCP_PORT}")
         logger.info(f"Serial port: {FEATHER_PORT}, watchdog timeout: {WATCHDOG_TIMEOUT}s")
-
-    # ── Main loop ──────────────────────────────────────────
 
     def run(self) -> None:
         """Main loop: wait for client connections; restart after each disconnect."""
@@ -104,27 +100,19 @@ class RobotReceiver:
             self._dispatch(char)
 
     def _dispatch(self, char: str) -> None:
-        """Dispatch the received character to the appropriate handler."""
+        self._watchdog.reset()
         if char == HEARTBEAT_CHAR:
-            # Heartbeat: reset watchdog only, do NOT write to serial
-            self._watchdog.reset()
-            logger.debug("Heartbeat 'H' received, watchdog reset")
+            logger.debug("Heartbeat received")
         else:
-            # Control command: reset watchdog + write to serial (whitelist enforced inside serial_writer)
-            self._watchdog.reset()
             self._serial.write_command(char)
-            logger.info(f"Command received: {repr(char)}, written to serial")
-
-    # ── Watchdog timeout callback ──────────────────────────
+            logger.info(f"Command: {repr(char)}")
 
     def _on_watchdog_timeout(self) -> None:
-        """Trigger emergency stop on watchdog timeout (runs in timer thread)."""
+        """Emergency stop on watchdog timeout (runs in timer thread)."""
         self._serial.emergency_stop()
 
-    # ── Graceful shutdown ──────────────────────────────────
-
     def shutdown(self) -> None:
-        """Graceful shutdown: stop the main loop, close socket and serial port."""
+        """Stop the main loop, close socket and serial port."""
         logger.info("Shutting down robot receiver...")
         self._running = False
         if self._server_sock:
@@ -136,8 +124,6 @@ class RobotReceiver:
         self._serial.close()
         logger.info("Robot receiver shut down")
 
-
-# ── Entry point ────────────────────────────────────────────
 
 def main() -> None:
     receiver = RobotReceiver()

@@ -50,10 +50,7 @@ class SerialWriter:
                 logger.info("Serial port closed")
 
     def write_command(self, char: str) -> None:
-        """
-        Write a single control character to the serial port (whitelist-filtered).
-        Only w/s/a/d/space are allowed; other characters are logged and discarded.
-        """
+        """Write a control character to serial (whitelist-filtered; illegal chars are discarded)."""
         if char not in ALLOWED_COMMANDS:
             logger.warning(f"Illegal command character intercepted: {repr(char)}")
             return
@@ -66,7 +63,6 @@ class SerialWriter:
         self._write_raw(b" ")
 
     def _write_raw(self, data: bytes) -> None:
-        """Low-level serial write, protected by a lock."""
         with self._lock:
             if self._ser is None or not self._ser.is_open:
                 logger.error("Serial port not open, cannot write")

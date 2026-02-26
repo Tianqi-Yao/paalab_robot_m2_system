@@ -6,11 +6,11 @@ Usage:
     python main.py
 
 Scenarios:
-    1. Local control (serial only)      - local_controller.py
-    2. Local control + camera stream    - local_controller.py + camera_streamer.py
-    3. Remote TCP control               - robot_receiver.py
-    4. Remote TCP + camera stream       - robot_receiver.py  + camera_streamer.py
-    5. Local camera test                - camera sub-menu
+    1. Local control                      - local_controller.py
+    2. Local control + camera             - local_controller.py + Camera_multiple_outputs.py
+    3. Remote TCP control                 - robot_receiver.py
+    4. Remote TCP control + camera stream - robot_receiver.py + camera_streamer.py
+    5. Local camera test                  - camera sub-menu
 """
 
 import logging
@@ -20,7 +20,6 @@ import sys
 import time
 from pathlib import Path
 
-# ── Logging configuration ──────────────────────────────────
 _py_name = Path(__file__).stem
 Path("log").mkdir(exist_ok=True)
 logging.basicConfig(
@@ -33,54 +32,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Menu definition ────────────────────────────────────────
+CAMERA_MULTI_CMD = [
+    sys.executable, "cam_demo/Camera_multiple_outputs.py",
+    "300", "300", "0", "30", "CAM_A",
+    "300", "300", "0", "30", "CAM_B",
+    "300", "300", "0", "30", "CAM_C",
+]
+
 MENU = {
-    "1": {
-        "label": "Local control (serial only)",
-        "scripts": ["local_controller.py"],
-    },
-    "2": {
-        "label": "Local control + camera stream",
-        "scripts": ["local_controller.py", "camera_streamer.py"],
-    },
-    "3": {
-        "label": "Remote TCP control",
-        "scripts": ["robot_receiver.py"],
-    },
-    "4": {
-        "label": "Remote TCP + camera stream",
-        "scripts": ["robot_receiver.py", "camera_streamer.py"],
-    },
-    "5": {
-        "label": "Local camera test",
-        "scripts": [],          # 由 run_camera_menu() 处理
-    },
+    "1": {"label": "Local control",                      "cmds": [[sys.executable, "local_controller.py"]]},
+    "2": {"label": "Local control + camera",             "cmds": [[sys.executable, "local_controller.py"], CAMERA_MULTI_CMD]},
+    "3": {"label": "Remote TCP control",                 "cmds": [[sys.executable, "robot_receiver.py"]]},
+    "4": {"label": "Remote TCP control + camera stream", "cmds": [[sys.executable, "robot_receiver.py"],
+                                                                   [sys.executable, "camera_streamer.py"]]},
+    "5": {"label": "Local camera test",                  "cmds": None},
 }
 
 CAMERA_MENU = {
-    "1": {
-        "label": "Simple viewer       (300×300, CAM_A)",
-        "cmd":   [sys.executable, "camera_viewer.py"],
-    },
-    "2": {
-        "label": "All cameras         (full resolution)",
-        "cmd":   [sys.executable, "demo/Display_all_cameras.py"],
-    },
-    "3": {
-        "label": "Multi-output        (300×300, CAM_A + CAM_B + CAM_C)",
-        "cmd":   [sys.executable, "demo/Camera_multiple_outputs.py",
+    "1": {"label": "Simple viewer       (300×300, CAM_A)",
+          "cmd": [sys.executable, "cam_demo/camera_viewer.py"]},
+    "2": {"label": "All cameras         (full resolution)",
+          "cmd": [sys.executable, "cam_demo/Display_all_cameras.py"]},
+    "3": {"label": "Multi-output        (300×300, CAM_A + CAM_B + CAM_C)",
+          "cmd": [sys.executable, "cam_demo/Camera_multiple_outputs.py",
                   "300", "300", "0", "30", "CAM_A",
                   "300", "300", "0", "30", "CAM_B",
-                  "300", "300", "0", "30", "CAM_C"],
-    },
-    "4": {
-        "label": "Depth align demo",
-        "cmd":   [sys.executable, "demo/Depth_Align.py"],
-    },
-    "5": {
-        "label": "Detection (YOLO)    demo",
-        "cmd":   [sys.executable, "demo/Detection_network.py"],
-    },
+                  "300", "300", "0", "30", "CAM_C"]},
+    "4": {"label": "Depth align demo",
+          "cmd": [sys.executable, "cam_demo/Depth_Align.py"]},
+    "5": {"label": "Detection (YOLO)    demo",
+          "cmd": [sys.executable, "cam_demo/Detection_network.py"]},
 }
 
 
@@ -109,7 +90,6 @@ def print_camera_menu() -> None:
 
 
 def _flush_stdin() -> None:
-    """丢弃 pynput 会话遗留在 stdin 缓冲区中的按键。"""
     try:
         import termios
         termios.tcflush(sys.stdin, termios.TCIFLUSH)
@@ -117,21 +97,17 @@ def _flush_stdin() -> None:
         pass
 
 
-def run_scripts(scripts: list[str]) -> None:
-    """
-    Launch scripts as subprocesses and wait until all exit.
-    Ctrl+C / SIGTERM will terminate all child processes.
-    """
+def run_scripts(cmds: list[list[str]]) -> None:
+    """Launch commands as subprocesses and wait until all exit."""
     procs: list[subprocess.Popen] = []
 
-    for script in scripts:
-        logger.info(f"Starting: {script}")
+    for cmd in cmds:
+        logger.info(f"Starting: {cmd[1]}")
         try:
-            p = subprocess.Popen([sys.executable, script])
+            p = subprocess.Popen(cmd)
             procs.append(p)
         except Exception as e:
-            logger.error(f"Failed to start {script}: {e}")
-            # Terminate already-started processes
+            logger.error(f"Failed to start {cmd[1]}: {e}")
             for running in procs:
                 running.terminate()
             raise
@@ -145,27 +121,23 @@ def run_scripts(scripts: list[str]) -> None:
     signal.signal(signal.SIGINT, _terminate_all)
     signal.signal(signal.SIGTERM, _terminate_all)
 
-    logger.info(f"Running: {', '.join(scripts)} — press Ctrl+C to stop all")
+    names = ", ".join(cmd[1] for cmd in cmds)
+    logger.info(f"Running: {names} — press Ctrl+C to stop all")
 
     try:
         while True:
-            # Check if any process exited
-            for p in procs:
+            for i, p in enumerate(procs):
                 ret = p.poll()
                 if ret is not None:
-                    script_name = scripts[procs.index(p)]
-                    logger.info(f"{script_name} exited (code {ret}), terminating others...")
+                    logger.info(f"{cmds[i][1]} exited (code {ret}), terminating others...")
                     _terminate_all()
-                    # Wait briefly for others to clean up
                     for other in procs:
                         try:
                             other.wait(timeout=3.0)
                         except subprocess.TimeoutExpired:
                             other.kill()
                     return
-
             time.sleep(0.2)
-
     except KeyboardInterrupt:
         _terminate_all()
         for p in procs:
@@ -174,31 +146,16 @@ def run_scripts(scripts: list[str]) -> None:
             except subprocess.TimeoutExpired:
                 p.kill()
 
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     logger.info("All processes stopped")
 
 
 def run_single_cmd(cmd: list[str]) -> None:
-    """运行一个命令（含参数），等待其退出，支持 Ctrl+C 打断。"""
-    logger.info(f"Starting: {' '.join(cmd[1:])}")
-    try:
-        p = subprocess.Popen(cmd)
-    except Exception as e:
-        logger.error(f"Failed to start: {e}")
-        return
-
-    try:
-        p.wait()
-    except KeyboardInterrupt:
-        p.terminate()
-        try:
-            p.wait(timeout=3.0)
-        except subprocess.TimeoutExpired:
-            p.kill()
-    logger.info("Camera demo exited")
+    run_scripts([cmd])
 
 
 def run_camera_menu() -> None:
-    """相机测试子菜单循环。"""
     print_camera_menu()
     while True:
         try:
@@ -220,8 +177,6 @@ def run_camera_menu() -> None:
         run_single_cmd(item["cmd"])
         print_camera_menu()
 
-
-# ── Entry point ────────────────────────────────────────────
 
 def main() -> None:
     print_menu()
@@ -252,14 +207,11 @@ def main() -> None:
         print(f"\n>>> Starting: {item['label']}\n")
 
         try:
-            run_scripts(item["scripts"])
+            run_scripts(item["cmds"])
         except Exception as e:
             logger.error(f"Launch error: {e}")
 
-        # 冲洗 pynput 会话遗留在 stdin 缓冲区中的按键，防止 Invalid option 刷屏
         _flush_stdin()
-
-        # Back to menu after processes exit
         print_menu()
 
 

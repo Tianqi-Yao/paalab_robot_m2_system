@@ -28,14 +28,9 @@ from pathlib import Path
 
 from pynput import keyboard
 
-from config import (
-    ALLOWED_COMMANDS,
-    FEATHER_PORT,
-    KEY_REPEAT_INTERVAL,
-)
+from config import FEATHER_PORT, KEY_REPEAT_INTERVAL
 from serial_writer import SerialWriter
 
-# ── Logging configuration ──────────────────────────────────
 _py_name = Path(__file__).stem
 Path("log").mkdir(exist_ok=True)
 logging.basicConfig(
@@ -48,8 +43,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Key mapping (same as remote_sender.py) ─────────────────
-CONTROL_KEYS: dict = {"w": "w", "s": "s", "a": "a", "d": "d"}
+CONTROL_KEYS = frozenset({"w", "s", "a", "d"})
 STOP_CHAR: str = " "
 QUIT_KEY: str = "q"
 
@@ -60,41 +54,19 @@ class LocalController:
     def __init__(self) -> None:
         self._serial = SerialWriter(port=FEATHER_PORT)
         self._running = False
-
-        # Currently pressed control chars, protected by a Lock
         self._pressed_keys: set[str] = set()
         self._keys_lock = threading.Lock()
-
-        # Key repeat thread
         self._repeat_thread: threading.Thread | None = None
-
-        # Enter key held state (suppress OS key-repeat events)
         self._enter_held: bool = False
 
-    # ── Serial write helpers ────────────────────────────────
-
     def _send(self, char: str) -> None:
-        """Write a single control character to serial."""
         try:
             self._serial.write_command(char)
         except Exception as e:
             logger.error(f"Serial write error: {e}")
             self._running = False
 
-    def _emergency_stop(self) -> None:
-        """Send emergency stop via serial."""
-        try:
-            self._serial.emergency_stop()
-        except Exception as e:
-            logger.error(f"Emergency stop serial error: {e}")
-
-    # ── Key repeat thread ───────────────────────────────────
-
     def _key_repeat_loop(self) -> None:
-        """
-        Continuously send active key at KEY_REPEAT_INTERVAL (10 Hz).
-        Sends emergency stop (space) when no key is pressed.
-        """
         logger.info(f"Key repeat thread started, rate: {1.0 / KEY_REPEAT_INTERVAL:.0f}Hz")
         while self._running:
             with self._keys_lock:
@@ -108,10 +80,7 @@ class LocalController:
 
             time.sleep(KEY_REPEAT_INTERVAL)
 
-    # ── Keyboard listener callbacks ─────────────────────────
-
     def _on_press(self, key) -> None:
-        """Key press callback."""
         char = self._key_to_char(key)
         if char is None:
             return
@@ -122,23 +91,20 @@ class LocalController:
             return
 
         if char == "\r":
-            if not self._enter_held:           # 只在首次按下时发送，屏蔽 OS 按键重复
+            if not self._enter_held:
                 self._enter_held = True
                 logger.info("Enter key pressed -> sending state toggle command")
                 self._send("\r")
             return
 
         if char in CONTROL_KEYS:
-            send_char = CONTROL_KEYS[char]
             with self._keys_lock:
-                if send_char not in self._pressed_keys:
-                    self._pressed_keys.add(send_char)
-                    logger.info(f"Key pressed: {repr(char)} -> sending {repr(send_char)}")
-            # Immediate send for instant response
-            self._send(send_char)
+                if char not in self._pressed_keys:
+                    self._pressed_keys.add(char)
+                    logger.info(f"Key pressed: {repr(char)}")
+            self._send(char)
 
     def _on_release(self, key) -> None:
-        """Key release callback."""
         char = self._key_to_char(key)
         if char is None:
             return
@@ -148,20 +114,20 @@ class LocalController:
             return
 
         if char in CONTROL_KEYS:
-            send_char = CONTROL_KEYS[char]
             with self._keys_lock:
-                self._pressed_keys.discard(send_char)
+                self._pressed_keys.discard(char)
                 remaining = len(self._pressed_keys)
             logger.debug(f"Key released: {repr(char)}, keys still held: {remaining}")
 
-            # Send emergency stop immediately when all keys are released
             if remaining == 0:
-                self._emergency_stop()
+                try:
+                    self._serial.emergency_stop()
+                except Exception as e:
+                    logger.error(f"Emergency stop serial error: {e}")
                 logger.info("All keys released, emergency stop sent")
 
     @staticmethod
     def _key_to_char(key) -> str | None:
-        """Convert pynput Key object to string; returns None if not applicable."""
         try:
             if hasattr(key, "char") and key.char is not None:
                 return key.char
@@ -173,14 +139,10 @@ class LocalController:
             pass
         return None
 
-    # ── Main flow ───────────────────────────────────────────
-
     def run(self) -> None:
-        """Open serial port, start threads, begin keyboard listening."""
         self._serial.open()
         self._running = True
 
-        # Start key repeat thread
         self._repeat_thread = threading.Thread(
             target=self._key_repeat_loop, daemon=True, name="key_repeat"
         )
@@ -190,7 +152,6 @@ class LocalController:
         logger.info(f"Serial port: {FEATHER_PORT}")
         logger.info("NOTE: Do NOT start robot_receiver.py at the same time (serial port conflict)")
 
-        # pynput listener blocks until _running=False
         with keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release,
@@ -202,24 +163,22 @@ class LocalController:
         logger.info("Keyboard listener stopped")
 
     def shutdown(self) -> None:
-        """Graceful shutdown: send emergency stop, close serial port."""
         logger.info("Shutting down local controller...")
         self._running = False
 
-        # Final emergency stop
         if self._serial.is_open:
-            self._emergency_stop()
+            try:
+                self._serial.emergency_stop()
+            except Exception as e:
+                logger.error(f"Emergency stop serial error: {e}")
             logger.info("Final emergency stop sent")
 
-        # Wait for repeat thread
         if self._repeat_thread and self._repeat_thread.is_alive():
             self._repeat_thread.join(timeout=2.0)
 
         self._serial.close()
         logger.info("Local controller shut down")
 
-
-# ── Entry point ─────────────────────────────────────────────
 
 def main() -> None:
     controller = LocalController()

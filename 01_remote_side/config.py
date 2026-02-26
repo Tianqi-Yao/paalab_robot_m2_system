@@ -1,32 +1,34 @@
 """
 Remote-side configuration.
 All parameters can be overridden via environment variables.
+
+Required:
+    export ROBOT_HOST=192.168.x.x   # IP address of the robot (Mac Mini)
+
+Optional overrides:
+    export TCP_PORT=9000
+    export STREAM_PORT=8080
+    export HEARTBEAT_INTERVAL=0.5
+    export KEY_REPEAT_INTERVAL=0.1
 """
 
 import os
 
-# ── Connection configuration ───────────────────────────────
-ROBOT_HOST: str = os.environ.get("ROBOT_HOST", "192.168.1.100")  # robot-side (Mac Mini) IP
-ROBOT_PORT: int = int(os.environ.get("ROBOT_PORT", "9000"))
+# ── Robot connection ────────────────────────────────────────────────────────
+ROBOT_HOST: str = os.environ.get("ROBOT_HOST", "192.168.1.100")
 
-# ── Heartbeat configuration (must be well below watchdog timeout 2.0s) ────
+# ── Control channel (TCP) ───────────────────────────────────────────────────
+TCP_PORT: int = int(os.environ.get("TCP_PORT", "9000"))
+
+# ── Video stream channel (MJPEG over HTTP) ──────────────────────────────────
+STREAM_PORT: int = int(os.environ.get("STREAM_PORT", "8080"))
+STREAM_URL: str = f"http://{ROBOT_HOST}:{STREAM_PORT}"
+
+# ── Timing ──────────────────────────────────────────────────────────────────
 HEARTBEAT_INTERVAL: float = float(os.environ.get("HEARTBEAT_INTERVAL", "0.5"))
-
-# ── Key repeat interval (10 Hz) ────────────────────────────
 KEY_REPEAT_INTERVAL: float = float(os.environ.get("KEY_REPEAT_INTERVAL", "0.1"))
 
-# ── Control key mapping ────────────────────────────────────
-# pynput key character -> byte sent to robot
-CONTROL_KEYS: dict = {
-    "w": "w",
-    "s": "s",
-    "a": "a",
-    "d": "d",
-}
-STOP_CHAR: str = " "       # emergency stop character
-HEARTBEAT_CHAR: str = "H"  # heartbeat character
-QUIT_KEY: str = "q"        # quit key
-
-# ── Camera stream URLs ─────────────────────────────────────
-CAM1_URL: str = os.environ.get("CAM1_URL", f"http://{ROBOT_HOST}:8080")
-CAM2_URL: str = os.environ.get("CAM2_URL", f"http://{ROBOT_HOST}:8081")
+# ── Reconnection ────────────────────────────────────────────────────────────
+TCP_RECONNECT_DELAY: float = float(os.environ.get("TCP_RECONNECT_DELAY", "2.0"))
+STREAM_RECONNECT_DELAY: float = float(os.environ.get("STREAM_RECONNECT_DELAY", "3.0"))
+STREAM_STALE_TIMEOUT: float = float(os.environ.get("STREAM_STALE_TIMEOUT", "3.0"))
