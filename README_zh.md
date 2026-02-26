@@ -1,6 +1,6 @@
 # M2 System — 农业机器人 LAN 控制系统
 
-通过局域网（LAN）对 farm-ng Amiga 农业机器人进行远程键盘控制与视频流传输。
+通过局域网（LAN）对 farm-ng Amiga 农业机器人进行远程键盘控制、视频流传输，以及**手机网页摇杆控制**。
 
 ---
 
@@ -18,6 +18,15 @@
   机器人端 (00_robot_side/)
   ├── robot_receiver.py   → 串口 → Feather M4 CAN → CAN 总线 → Amiga Dashboard
   └── camera_streamer.py  ← FrameSource（可插拔 Pipeline）
+
+手机浏览器（同 LAN）
+└── HTTP :8888 → index.html（nipplejs 摇杆 + IMU HUD）
+        │
+        │  WebSocket :8889
+        ▼
+  机器人端 (00_robot_side/)
+  └── web_controller.py → 串口 → Feather M4 CAN → CAN 总线 → Amiga Dashboard
+                        ← OAK-D BNO085 IMU（20 Hz 广播）
 ```
 
 ---
@@ -27,17 +36,21 @@
 ```
 m2_system/
 ├── 00_robot_side/                  # 机器人端（Mac Mini / Linux）
-│   ├── config.py                   # 串口/TCP/看门狗/相机参数（支持环境变量覆盖）
+│   ├── config.py                   # 串口/TCP/看门狗/相机/Web 参数（支持环境变量覆盖）
 │   ├── serial_writer.py            # 线程安全串口封装，命令白名单过滤
 │   ├── watchdog.py                 # 看门狗定时器，超时自动急停
 │   ├── robot_receiver.py           # TCP 服务端 + 看门狗 + 串口转发
 │   ├── local_controller.py         # 本地键盘直连串口（无需 TCP）
 │   ├── frame_source.py             # FrameSource ABC + SimpleColorSource（OAK-D）
 │   ├── camera_streamer.py          # MJPEGServer：将 FrameSource 推流为 HTTP MJPEG
+│   ├── web_controller.py           # Web 摇杆：HTTP :8888 + WebSocket :8889 + IMU 广播
+│   ├── web_static/
+│   │   ├── index.html              # 单页 HUD（nipplejs 摇杆 + 罗盘 + IMU 数据）
+│   │   └── nipplejs.min.js         # nipplejs 本地副本（LAN 无需 CDN）
 │   ├── main.py                     # 交互式启动菜单（推荐入口）
 │   ├── log/                        # 运行日志（自动创建）
 │   └── cam_demo/                   # OAK-D 相机示例脚本
-│       ├── camera_viewer.py        # OAK-D 本地查看器（单机调试用）
+│       ├── camera_viewer.py
 │       ├── Camera_output.py
 │       ├── Camera_multiple_outputs.py
 │       ├── Display_all_cameras.py
@@ -53,10 +66,11 @@ m2_system/
 │   ├── main.py                     # 一键启动：sender（后台线程）+ viewer（主线程）
 │   └── log/                        # 运行日志（自动创建）
 ├── CIRCUITPY/                      # Feather M4 CAN 固件（CircuitPython）
-│   ├── code.py                     # 主程序：解析串口命令 → CAN 帧
+│   ├── code.py                     # 解析串口命令（WASD + V 速度命令）→ CAN 帧
 │   └── lib/farm_ng/                # farm-ng Amiga 协议库
 ├── CLAUDE.md
-└── README.md
+├── README.md                       # 英文文档
+└── README_zh.md                    # 本文件（中文）
 ```
 
 ---
@@ -72,7 +86,7 @@ m2_system/
 ```
 
 - 无需 TCP，直接持有串口；无看门狗（操作员在现场）
-- **注意：不可与 `robot_receiver.py` 同时运行（串口冲突）**
+- **注意：不可与 `robot_receiver.py` 或 `web_controller.py` 同时运行（串口冲突）**
 
 ### 模式 B：远程 TCP 控制
 
@@ -93,9 +107,52 @@ m2_system/
         ◄─HTTP:8080── camera_streamer.py ◄── FrameSource（OAK-D / YOLO / ...）
 ```
 
+### 模式 D：Web 摇杆控制（手机/平板友好）
+
+用同局域网内的任意手机或平板浏览器控制机器人。
+支持**比例控制**（对角线运动）和实时 IMU / 罗盘 HUD 显示。
+
+```
+手机浏览器 ──HTTP:8888──► web_static/index.html（nipplejs 摇杆 + IMU HUD）
+          ──WS:8889────► web_controller.py ──串口──► Feather M4 CAN
+          ◄─WS:8889───── web_controller.py ◄── OAK-D BNO085 IMU（20 Hz）
+```
+
+与模式 B 的主要区别：
+- **比例控制**：摇杆直接映射到绝对速度，不再是增量步进
+- **对角线运动**：线速度和角速度同时设定，一条命令完成
+- **IMU HUD**：加速度计、陀螺仪、磁力罗盘实时显示于浏览器
+- 无需安装任何 App，现代手机浏览器直接访问
+
 ---
 
-## 键位说明
+## 串口协议
+
+### WASD（原有，单字节增量）
+
+| 字节    | 动作                                       |
+|---------|--------------------------------------------|
+| `w`     | `cmd_speed += 0.1`                         |
+| `s`     | `cmd_speed -= 0.1`                         |
+| `a`     | `cmd_ang_rate += 0.1`                      |
+| `d`     | `cmd_ang_rate -= 0.1`                      |
+| `空格`  | 急停（`cmd_speed = cmd_ang_rate = 0`）     |
+| `\r`    | 切换 AUTO_READY ↔ AUTO_ACTIVE              |
+
+### V 命令（新增，绝对速度）
+
+```
+格式：  "V{speed:.2f},{angular:.2f}\n"
+示例：  "V0.50,-0.30\n"   →  前进 0.5 m/s，右转 0.3 rad/s
+        "V0.00,0.00\n"    →  急停
+        "V-0.30,0.20\n"   →  后退 + 左转（对角线运动）
+```
+
+速度值在固件侧钳位到 `[-1.0, 1.0]`。两种协议同时有效。
+
+---
+
+## 键位说明（键盘模式）
 
 | 按键    | 功能                                    |
 |---------|-----------------------------------------|
@@ -115,7 +172,7 @@ m2_system/
 
 ```bash
 # 机器人端（Mac Mini / Linux）
-pip install pyserial pynput depthai opencv-python
+pip install pyserial depthai opencv-python websockets
 
 # 远程端
 pip install pynput opencv-python
@@ -127,20 +184,24 @@ pip install pynput opencv-python
 
 ### 机器人端（`00_robot_side/config.py`）
 
-| 参数                  | 默认值（macOS）            | 默认值（Linux）    | 说明                     |
-|-----------------------|----------------------------|--------------------|--------------------------|
-| `FEATHER_PORT`        | `/dev/cu.usbmodem2301`     | `/dev/ttyACM0`     | Feather M4 CAN 串口路径  |
-| `SERIAL_BAUD`         | `115200`                   | 同左               | 串口波特率               |
-| `TCP_PORT`            | `9000`                     | 同左               | TCP 监听端口             |
-| `WATCHDOG_TIMEOUT`    | `2.0` 秒                   | 同左               | 看门狗超时时间           |
-| `KEY_REPEAT_INTERVAL` | `0.1` 秒（10 Hz）          | 同左               | 按键重复发送间隔         |
-| `CAM1_IP`             | `10.95.76.10`              | 同左               | OAK-D PoE 相机 1 IP      |
-| `CAM2_IP`             | `10.95.76.11`              | 同左               | OAK-D PoE 相机 2 IP      |
-| `CAM1_STREAM_PORT`    | `8080`                     | 同左               | 相机 1 MJPEG 流端口      |
-| `CAM2_STREAM_PORT`    | `8081`                     | 同左               | 相机 2 MJPEG 流端口      |
-| `MJPEG_QUALITY`       | `80`                       | 同左               | JPEG 编码质量（1–100）   |
-| `LOCAL_DISPLAY`       | `0`（关）                  | 同左               | `1` 开启机器人端本地预览 |
-| `CAM2_ENABLED`        | `0`（关）                  | 同左               | `1` 同时启动第二路相机   |
+| 参数                  | 默认值（macOS）            | 默认值（Linux）    | 说明                         |
+|-----------------------|----------------------------|--------------------|------------------------------|
+| `FEATHER_PORT`        | `/dev/cu.usbmodem2301`     | `/dev/ttyACM0`     | Feather M4 CAN 串口路径      |
+| `SERIAL_BAUD`         | `115200`                   | 同左               | 串口波特率                   |
+| `TCP_PORT`            | `9000`                     | 同左               | TCP 监听端口                 |
+| `WATCHDOG_TIMEOUT`    | `2.0` 秒                   | 同左               | 看门狗超时时间               |
+| `KEY_REPEAT_INTERVAL` | `0.1` 秒（10 Hz）          | 同左               | 按键重复发送间隔             |
+| `CAM1_IP`             | `10.95.76.10`              | 同左               | OAK-D PoE 相机 1 IP          |
+| `CAM2_IP`             | `10.95.76.11`              | 同左               | OAK-D PoE 相机 2 IP          |
+| `CAM1_STREAM_PORT`    | `8080`                     | 同左               | 相机 1 MJPEG 流端口          |
+| `CAM2_STREAM_PORT`    | `8081`                     | 同左               | 相机 2 MJPEG 流端口          |
+| `MJPEG_QUALITY`       | `80`                       | 同左               | JPEG 编码质量（1–100）       |
+| `LOCAL_DISPLAY`       | `0`（关）                  | 同左               | `1` 开启机器人端本地预览     |
+| `CAM2_ENABLED`        | `0`（关）                  | 同左               | `1` 同时启动第二路相机       |
+| `WEB_HTTP_PORT`       | `8888`                     | 同左               | Web 摇杆 HTTP 端口           |
+| `WEB_WS_PORT`         | `8889`                     | 同左               | Web 摇杆 WebSocket 端口      |
+| `MAX_LINEAR_VEL`      | `1.0` m/s                  | 同左               | 摇杆最大线速度               |
+| `MAX_ANGULAR_VEL`     | `1.0` rad/s                | 同左               | 摇杆最大角速度               |
 
 ### 远程端（`01_remote_side/config.py`）
 
@@ -167,20 +228,44 @@ python main.py
 ```
 
 ```
-========================================
+=======================================================
    Farm Robot — Robot-side Launcher
-========================================
+=======================================================
   1. Local control
   2. Local control + camera
   3. Remote TCP control
   4. Remote TCP control + camera stream
   5. Local camera test
+  6. Web joystick control (HTTP :8888, WS :8889)
 
   q. Quit
-========================================
+=======================================================
 ```
 
-选项 **4** 同时启动 `robot_receiver.py`（控制信道）和 `camera_streamer.py`（视频流），按 `Ctrl+C` 两者一起停止。
+- 选项 **4**：同时启动 `robot_receiver.py` + `camera_streamer.py`，按 `Ctrl+C` 两者一起停止
+- 选项 **6**：启动 `web_controller.py`，手机访问 `http://<机器人IP>:8888/`
+
+### Web 摇杆（模式 D）
+
+```bash
+# 机器人端
+cd m2_system/00_robot_side
+python web_controller.py
+# 日志会打印机器人的局域网 IP 地址
+
+# 手机 / 平板 — 同局域网下用浏览器打开
+http://<机器人IP>:8888/
+```
+
+摇杆速度映射规则：
+
+```
+force < 0.15      → 死区，机器人停止
+摇杆向上          → 前进（linear = +force × MAX_LINEAR_VEL）
+摇杆右上 45°      → 前进 + 右转（对角线运动）
+松开摇杆          → 立即发送急停
+断开/无心跳 2 秒  → 看门狗触发急停
+```
 
 ### 远程端（一键启动）
 
@@ -254,35 +339,41 @@ class DepthAlignSource(FrameSource): ...    # 彩色 + 深度拼图
 工作流程：
 
 1. 监听 USB 串口（115200 baud）
-2. 解析单字节命令（`w` / `s` / `a` / `d` / `空格` / `\r`）
-3. 更新速度和角速度（增量 ±0.1），以 20 Hz 发送 CAN RPDO1 帧
+2. 同时解析两种协议：
+   - **WASD**（单字节）：`w/s/a/d/空格/\r` → 增量速度调整
+   - **V 命令**（多字节行）：`V{speed},{angular}\n` → 绝对速度设定（Web 摇杆使用）
+3. 以 20 Hz 发送 CAN RPDO1 帧，携带当前 `cmd_speed` + `cmd_ang_rate`
 4. 接收 Amiga Dashboard 的 TPDO1 状态帧，同步控制状态
 
 ---
 
 ## 安全机制
 
-| 机制               | 说明                                              |
-|--------------------|---------------------------------------------------|
-| 看门狗定时器       | 2 秒内无任何命令（含心跳）→ 自动发送急停          |
-| 命令白名单         | `SerialWriter` 仅允许 `w/s/a/d/空格/\r` 通过     |
-| 松键急停           | 所有方向键释放后立即发送急停字符                  |
-| TCP 断线急停       | 客户端断开时 `robot_receiver.py` 立即发送急停     |
-| 异常日志           | 所有异常均记录到 logger，禁止静默吞异常           |
+| 机制                | 说明                                                       |
+|---------------------|------------------------------------------------------------|
+| 看门狗定时器        | 2 秒内无任何命令（含心跳）→ 自动发送急停                   |
+| 命令白名单          | `SerialWriter` 仅允许 `w/s/a/d/空格/\r` 通过               |
+| 松键急停            | 所有方向键释放后立即发送急停字符                           |
+| TCP 断线急停        | 客户端断开时 `robot_receiver.py` 立即发送急停              |
+| WS 断线急停         | 浏览器断开时 `web_controller.py` 立即发送 `V0.00,0.00\n`   |
+| 摇杆死区            | `force < 0.15` → 发送零速度命令                            |
+| 速度钳位            | 固件将 V 命令值钳位到 `[-1.0, 1.0]`                        |
+| 异常日志            | 所有异常均记录到 logger，禁止静默吞异常                    |
 
 ---
 
 ## 日志
 
-| 脚本                    | 日志文件                              |
-|-------------------------|---------------------------------------|
-| `main.py`（机器人端）   | `00_robot_side/log/robot_main.log`    |
-| `local_controller.py`   | `00_robot_side/log/local_controller.log` |
-| `robot_receiver.py`     | `00_robot_side/log/robot_receiver.log` |
-| `camera_streamer.py`    | `00_robot_side/log/camera_streamer.log` |
-| `main.py`（远程端）     | `01_remote_side/log/main.log`         |
-| `remote_sender.py`      | `01_remote_side/log/remote_sender.log` |
-| `remote_viewer.py`      | `01_remote_side/log/remote_viewer.log` |
+| 脚本                    | 日志文件                                  |
+|-------------------------|-------------------------------------------|
+| `main.py`（机器人端）   | `00_robot_side/log/robot_main.log`        |
+| `local_controller.py`   | `00_robot_side/log/local_controller.log`  |
+| `robot_receiver.py`     | `00_robot_side/log/robot_receiver.log`    |
+| `camera_streamer.py`    | `00_robot_side/log/camera_streamer.log`   |
+| `web_controller.py`     | `00_robot_side/log/web_controller.log`    |
+| `main.py`（远程端）     | `01_remote_side/log/main.log`             |
+| `remote_sender.py`      | `01_remote_side/log/remote_sender.log`    |
+| `remote_viewer.py`      | `01_remote_side/log/remote_viewer.log`    |
 
 日志格式：
 

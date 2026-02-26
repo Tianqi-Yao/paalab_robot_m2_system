@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import sys
+import supervisor
 from canio import Message
 from farm_ng.utils.cobid import CanOpenObject
 from farm_ng.utils.main_loop import MainLoop
@@ -34,6 +36,8 @@ class HelloMainLoopApp:
         self.cmd_ang_rate = 0.0
         self.request_state = AmigaControlState.STATE_AUTO_READY
         self.inc = 0.1
+
+        self._line_buf = []  # 多字节命令行缓冲（用于 V 命令）
 
         self._register_message_handlers()
 
@@ -68,9 +72,30 @@ class HelloMainLoopApp:
         elif char == "d":
             self.cmd_ang_rate -= self.inc
 
+    def parse_velocity_cmd(self, line):
+        """解析 'V{speed},{ang_rate}\\n' 直接速度命令，速度钳位在 [-1.0, 1.0]。"""
+        try:
+            parts = line[1:].split(',')
+            if len(parts) == 2:
+                self.cmd_speed    = max(-1.0, min(1.0, float(parts[0])))
+                self.cmd_ang_rate = max(-1.0, min(1.0, float(parts[1])))
+        except (ValueError, IndexError):
+            pass  # 忽略格式错误的命令
+
     def serial_read(self):
         while console.in_waiting > 0:
-            self.parse_wasd_cmd((console.read().decode("ascii")))
+            char = console.read().decode("ascii")
+            # V 命令（多字节行协议）
+            if char == 'V' or self._line_buf:
+                self._line_buf.append(char)
+                if char == '\n':
+                    line = ''.join(self._line_buf).strip()
+                    self._line_buf.clear()
+                    if line.startswith('V'):
+                        self.parse_velocity_cmd(line)
+            else:
+                # 原有单字节 WASD 协议
+                self.parse_wasd_cmd(char)
 
     def iter(self):
         self.serial_read()

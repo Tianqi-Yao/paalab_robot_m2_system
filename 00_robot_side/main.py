@@ -11,6 +11,7 @@ Scenarios:
     3. Remote TCP control                 - robot_receiver.py
     4. Remote TCP control + camera stream - robot_receiver.py + camera_streamer.py
     5. Local camera test                  - camera sub-menu
+    6. Web joystick control               - web_controller.py (HTTP :8888, WS :8889)
 """
 
 import logging
@@ -46,6 +47,7 @@ MENU = {
     "4": {"label": "Remote TCP control + camera stream", "cmds": [[sys.executable, "robot_receiver.py"],
                                                                    [sys.executable, "camera_streamer.py"]]},
     "5": {"label": "Local camera test",                  "cmds": None},
+    "6": {"label": "Web joystick control (HTTP :8888, WS :8889)", "cmds": [[sys.executable, "web_controller.py"]]},
 }
 
 CAMERA_MENU = {
@@ -67,14 +69,14 @@ CAMERA_MENU = {
 
 def print_menu() -> None:
     print()
-    print("=" * 40)
+    print("=" * 55)
     print("   Farm Robot — Robot-side Launcher")
-    print("=" * 40)
+    print("=" * 55)
     for key, item in MENU.items():
         print(f"  {key}. {item['label']}")
     print()
     print("  q. Quit")
-    print("=" * 40)
+    print("=" * 55)
 
 
 def print_camera_menu() -> None:
@@ -183,7 +185,7 @@ def main() -> None:
 
     while True:
         try:
-            choice = input("Select [1-5 / q]: ").strip().lower()
+            choice = input("Select [1-6 / q]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             logger.info("Launcher exiting")
@@ -199,7 +201,7 @@ def main() -> None:
             continue
 
         if choice not in MENU:
-            print(f"  Invalid option '{choice}', enter 1-5 or q")
+            print(f"  Invalid option '{choice}', enter 1-6 or q")
             continue
 
         item = MENU[choice]

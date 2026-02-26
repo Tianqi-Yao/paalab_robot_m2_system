@@ -15,7 +15,7 @@ Optional overrides:
 import os
 
 # ── Robot connection ────────────────────────────────────────────────────────
-ROBOT_HOST: str = os.environ.get("ROBOT_HOST", "192.168.1.100")
+ROBOT_HOST: str = os.environ.get("ROBOT_HOST", "10.95.76.100")
 
 # ── Control channel (TCP) ───────────────────────────────────────────────────
 TCP_PORT: int = int(os.environ.get("TCP_PORT", "9000"))

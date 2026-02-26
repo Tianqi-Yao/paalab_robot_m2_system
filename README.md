@@ -1,6 +1,6 @@
 # M2 System — Farm Robot LAN Control
 
-Remote keyboard control and live video streaming for the farm-ng Amiga agricultural robot over a local area network (LAN).
+Remote keyboard control, live video streaming, and **mobile web joystick control** for the farm-ng Amiga agricultural robot over a local area network (LAN).
 
 > Chinese documentation: [README_zh.md](README_zh.md)
 
@@ -20,6 +20,15 @@ Remote PC (01_remote_side/)
 Robot side (00_robot_side/)
 ├── robot_receiver.py  → serial → Feather M4 CAN → CAN bus → Amiga Dashboard
 └── camera_streamer.py ← FrameSource (swappable pipeline)
+
+Mobile phone (browser, same LAN)
+└── HTTP :8888 → index.html (nipplejs joystick + IMU HUD)
+        │
+        │  WebSocket :8889
+        ▼
+Robot side (00_robot_side/)
+└── web_controller.py → serial → Feather M4 CAN → CAN bus → Amiga Dashboard
+                      ← IMU (OAK-D BNO085, 20 Hz broadcast)
 ```
 
 ---
@@ -29,17 +38,21 @@ Robot side (00_robot_side/)
 ```
 m2_system/
 ├── 00_robot_side/                  # Robot PC (Mac Mini / Linux)
-│   ├── config.py                   # Serial / TCP / watchdog / camera params (env-overridable)
+│   ├── config.py                   # Serial / TCP / watchdog / camera / web params (env-overridable)
 │   ├── serial_writer.py            # Thread-safe serial wrapper with command whitelist
 │   ├── watchdog.py                 # Watchdog timer — triggers emergency stop on timeout
 │   ├── robot_receiver.py           # TCP server + watchdog + serial forwarding
 │   ├── local_controller.py         # Local keyboard → serial (no TCP required)
 │   ├── frame_source.py             # FrameSource ABC + SimpleColorSource (OAK-D)
 │   ├── camera_streamer.py          # MJPEGServer: streams any FrameSource over HTTP
+│   ├── web_controller.py           # Web joystick: HTTP :8888 + WebSocket :8889 + IMU broadcast
+│   ├── web_static/
+│   │   ├── index.html              # Single-page HUD (nipplejs joystick + compass + IMU)
+│   │   └── nipplejs.min.js         # nipplejs local copy (no CDN required on LAN)
 │   ├── main.py                     # Interactive launcher menu (recommended entry point)
 │   ├── log/                        # Runtime logs (auto-created)
 │   └── cam_demo/                   # OAK-D camera demo scripts
-│       ├── camera_viewer.py        # OAK-D local viewer (single-machine debug)
+│       ├── camera_viewer.py
 │       ├── Camera_output.py
 │       ├── Camera_multiple_outputs.py
 │       ├── Display_all_cameras.py
@@ -55,7 +68,7 @@ m2_system/
 │   ├── main.py                     # One-shot launcher: sender (daemon thread) + viewer (main thread)
 │   └── log/                        # Runtime logs (auto-created)
 ├── CIRCUITPY/                      # Feather M4 CAN firmware (CircuitPython)
-│   ├── code.py                     # Parses serial commands → CAN frames
+│   ├── code.py                     # Parses serial commands (WASD + V velocity) → CAN frames
 │   └── lib/farm_ng/                # farm-ng Amiga protocol library
 ├── CLAUDE.md
 ├── README.md                       # This file (English)
@@ -76,7 +89,7 @@ Local PC (pynput) ──► local_controller.py ──serial──► Feather M4
 
 - No TCP required; serial port is held directly.
 - No watchdog (operator is physically present).
-- **Cannot run simultaneously with `robot_receiver.py` (serial port conflict).**
+- **Cannot run simultaneously with `robot_receiver.py` or `web_controller.py` (serial port conflict).**
 
 ### Mode B — Remote TCP control
 
@@ -98,9 +111,52 @@ Remote PC ──TCP:9000──► robot_receiver.py ──serial──► Feathe
           ◄─HTTP:8080── camera_streamer.py ◄── FrameSource (OAK-D / YOLO / …)
 ```
 
+### Mode D — Web joystick control (mobile-friendly)
+
+Control the robot from any smartphone or tablet browser on the same LAN.
+Provides proportional joystick input (diagonal motion supported) and a live IMU / compass HUD.
+
+```
+Phone browser ──HTTP:8888──► web_static/index.html   (nipplejs joystick + IMU HUD)
+              ──WS:8889────► web_controller.py ──serial──► Feather M4 CAN
+              ◄─WS:8889───── web_controller.py ◄── OAK-D BNO085 IMU (20 Hz)
+```
+
+Key differences from Mode B:
+- **Proportional control**: joystick maps directly to absolute speed values — no incremental steps.
+- **Diagonal motion**: linear and angular velocity set simultaneously in a single command.
+- **IMU HUD**: accelerometer, gyroscope, and magnetic compass rendered in the browser.
+- No dedicated app required — works in any modern mobile browser.
+
 ---
 
-## Key Bindings
+## Serial Protocol
+
+### WASD (legacy, single-byte incremental)
+
+| Byte    | Action                                   |
+|---------|------------------------------------------|
+| `w`     | `cmd_speed += 0.1`                       |
+| `s`     | `cmd_speed -= 0.1`                       |
+| `a`     | `cmd_ang_rate += 0.1`                    |
+| `d`     | `cmd_ang_rate -= 0.1`                    |
+| `Space` | Emergency stop (`cmd_speed = cmd_ang_rate = 0`) |
+| `\r`    | Toggle AUTO_READY ↔ AUTO_ACTIVE          |
+
+### V command (new, absolute velocity)
+
+```
+Format:  "V{speed:.2f},{angular:.2f}\n"
+Example: "V0.50,-0.30\n"   →  forward 0.5 m/s, turn right 0.3 rad/s
+         "V0.00,0.00\n"    →  emergency stop
+         "V-0.30,0.20\n"   →  reverse + turn left (diagonal motion)
+```
+
+Values are clamped to `[-1.0, 1.0]` on the firmware side. Both protocols are active simultaneously.
+
+---
+
+## Key Bindings (keyboard modes)
 
 | Key     | Action                                             |
 |---------|----------------------------------------------------|
@@ -120,7 +176,7 @@ Remote PC ──TCP:9000──► robot_receiver.py ──serial──► Feathe
 
 ```bash
 # Robot side (Mac Mini / Linux)
-pip install pyserial pynput depthai opencv-python
+pip install pyserial depthai opencv-python websockets
 
 # Remote side (operator PC)
 pip install pynput opencv-python
@@ -132,20 +188,24 @@ pip install pynput opencv-python
 
 ### Robot side (`00_robot_side/config.py`)
 
-| Parameter             | Default (macOS)            | Default (Linux)    | Description                      |
-|-----------------------|----------------------------|--------------------|----------------------------------|
-| `FEATHER_PORT`        | `/dev/cu.usbmodem2301`     | `/dev/ttyACM0`     | Feather M4 CAN serial port       |
-| `SERIAL_BAUD`         | `115200`                   | same               | Serial baud rate                 |
-| `TCP_PORT`            | `9000`                     | same               | TCP listening port               |
-| `WATCHDOG_TIMEOUT`    | `2.0` s                    | same               | Watchdog timeout                 |
-| `KEY_REPEAT_INTERVAL` | `0.1` s (10 Hz)            | same               | Key repeat interval              |
-| `CAM1_IP`             | `10.95.76.10`              | same               | OAK-D PoE camera 1 IP            |
-| `CAM2_IP`             | `10.95.76.11`              | same               | OAK-D PoE camera 2 IP            |
-| `CAM1_STREAM_PORT`    | `8080`                     | same               | Camera 1 MJPEG stream port       |
-| `CAM2_STREAM_PORT`    | `8081`                     | same               | Camera 2 MJPEG stream port       |
-| `MJPEG_QUALITY`       | `80`                       | same               | JPEG encoding quality (1–100)    |
-| `LOCAL_DISPLAY`       | `0` (off)                  | same               | Set `1` for local preview window |
-| `CAM2_ENABLED`        | `0` (off)                  | same               | Set `1` to stream a second camera |
+| Parameter             | Default (macOS)            | Default (Linux)    | Description                        |
+|-----------------------|----------------------------|--------------------|------------------------------------|
+| `FEATHER_PORT`        | `/dev/cu.usbmodem2301`     | `/dev/ttyACM0`     | Feather M4 CAN serial port         |
+| `SERIAL_BAUD`         | `115200`                   | same               | Serial baud rate                   |
+| `TCP_PORT`            | `9000`                     | same               | TCP listening port                 |
+| `WATCHDOG_TIMEOUT`    | `2.0` s                    | same               | Watchdog timeout                   |
+| `KEY_REPEAT_INTERVAL` | `0.1` s (10 Hz)            | same               | Key repeat interval                |
+| `CAM1_IP`             | `10.95.76.10`              | same               | OAK-D PoE camera 1 IP              |
+| `CAM2_IP`             | `10.95.76.11`              | same               | OAK-D PoE camera 2 IP              |
+| `CAM1_STREAM_PORT`    | `8080`                     | same               | Camera 1 MJPEG stream port         |
+| `CAM2_STREAM_PORT`    | `8081`                     | same               | Camera 2 MJPEG stream port         |
+| `MJPEG_QUALITY`       | `80`                       | same               | JPEG encoding quality (1–100)      |
+| `LOCAL_DISPLAY`       | `0` (off)                  | same               | Set `1` for local preview window   |
+| `CAM2_ENABLED`        | `0` (off)                  | same               | Set `1` to stream a second camera  |
+| `WEB_HTTP_PORT`       | `8888`                     | same               | Web joystick HTTP port             |
+| `WEB_WS_PORT`         | `8889`                     | same               | Web joystick WebSocket port        |
+| `MAX_LINEAR_VEL`      | `1.0` m/s                  | same               | Joystick maximum linear velocity   |
+| `MAX_ANGULAR_VEL`     | `1.0` rad/s                | same               | Joystick maximum angular velocity  |
 
 ### Remote side (`01_remote_side/config.py`)
 
@@ -172,21 +232,44 @@ python main.py
 ```
 
 ```
-========================================
+=======================================================
    Farm Robot — Robot-side Launcher
-========================================
+=======================================================
   1. Local control
   2. Local control + camera
   3. Remote TCP control
   4. Remote TCP control + camera stream
   5. Local camera test
+  6. Web joystick control (HTTP :8888, WS :8889)
 
   q. Quit
-========================================
+=======================================================
 ```
 
-Option **4** starts `robot_receiver.py` and `camera_streamer.py` in parallel.
-Press `Ctrl+C` to stop both at once.
+- Option **4**: starts `robot_receiver.py` + `camera_streamer.py` in parallel. Press `Ctrl+C` to stop both.
+- Option **6**: starts `web_controller.py`. Open `http://<robot-ip>:8888/` on your phone.
+
+### Web joystick (Mode D)
+
+```bash
+# Robot side
+cd m2_system/00_robot_side
+python web_controller.py
+# Logs will print the robot's LAN IP address
+
+# Phone / tablet — open in browser (same LAN)
+http://<robot-ip>:8888/
+```
+
+The joystick maps to proportional speed:
+
+```
+force < 0.15              → dead zone, robot stops
+joystick up               → forward  (linear = +force × MAX_LINEAR_VEL)
+joystick right + up       → forward + turn right (diagonal motion)
+release joystick          → immediate stop
+disconnect / no heartbeat → watchdog stops robot after 2 s
+```
 
 ### Remote side — all-in-one
 
@@ -259,35 +342,41 @@ Additional demo scripts are in the `cam_demo/` directory (IMU, feature tracking,
 Workflow:
 
 1. Listen on USB serial (115200 baud).
-2. Parse single-byte commands (`w` / `s` / `a` / `d` / `space` / `\r`).
-3. Update velocity and angular velocity (±0.1 increments); send CAN RPDO1 frame at 20 Hz.
+2. Parse commands from two protocols simultaneously:
+   - **WASD** (single-byte): `w/s/a/d/space/\r` → incremental speed adjustment
+   - **V command** (multi-byte line): `V{speed},{angular}\n` → absolute velocity (set by web joystick)
+3. Send CAN RPDO1 frame at 20 Hz with current `cmd_speed` + `cmd_ang_rate`.
 4. Receive TPDO1 status frames from the Amiga Dashboard to sync control state.
 
 ---
 
 ## Safety
 
-| Mechanism            | Description                                                     |
-|----------------------|-----------------------------------------------------------------|
-| Watchdog timer       | No command (including heartbeat) for 2 s → automatic emergency stop |
-| Command whitelist    | `SerialWriter` only passes `w/s/a/d/space/\r`                  |
-| Key-release stop     | All direction keys released → emergency stop sent immediately   |
-| TCP disconnect stop  | `robot_receiver.py` sends emergency stop when client disconnects |
-| Exception logging    | All exceptions are logged; silent swallowing is forbidden       |
+| Mechanism               | Description                                                          |
+|-------------------------|----------------------------------------------------------------------|
+| Watchdog timer          | No command (including heartbeat) for 2 s → automatic emergency stop  |
+| Command whitelist       | `SerialWriter` only passes `w/s/a/d/space/\r`                        |
+| Key-release stop        | All direction keys released → emergency stop sent immediately         |
+| TCP disconnect stop     | `robot_receiver.py` sends emergency stop when client disconnects      |
+| WS disconnect stop      | `web_controller.py` sends `V0.00,0.00\n` when browser disconnects    |
+| Joystick dead zone      | `force < 0.15` → zero velocity command sent                           |
+| Velocity clamp          | Firmware clamps V command values to `[-1.0, 1.0]`                    |
+| Exception logging       | All exceptions are logged; silent swallowing is forbidden             |
 
 ---
 
 ## Logs
 
-| Script                   | Log file                                  |
-|--------------------------|-------------------------------------------|
-| `main.py` (robot side)   | `00_robot_side/log/robot_main.log`        |
-| `local_controller.py`    | `00_robot_side/log/local_controller.log`  |
-| `robot_receiver.py`      | `00_robot_side/log/robot_receiver.log`    |
-| `camera_streamer.py`     | `00_robot_side/log/camera_streamer.log`   |
-| `main.py` (remote side)  | `01_remote_side/log/main.log`             |
-| `remote_sender.py`       | `01_remote_side/log/remote_sender.log`    |
-| `remote_viewer.py`       | `01_remote_side/log/remote_viewer.log`    |
+| Script                      | Log file                                    |
+|-----------------------------|---------------------------------------------|
+| `main.py` (robot side)      | `00_robot_side/log/robot_main.log`          |
+| `local_controller.py`       | `00_robot_side/log/local_controller.log`    |
+| `robot_receiver.py`         | `00_robot_side/log/robot_receiver.log`      |
+| `camera_streamer.py`        | `00_robot_side/log/camera_streamer.log`     |
+| `web_controller.py`         | `00_robot_side/log/web_controller.log`      |
+| `main.py` (remote side)     | `01_remote_side/log/main.log`               |
+| `remote_sender.py`          | `01_remote_side/log/remote_sender.log`      |
+| `remote_viewer.py`          | `01_remote_side/log/remote_viewer.log`      |
 
 Log format:
 

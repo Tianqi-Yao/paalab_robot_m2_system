@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Farm Robot Control</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --accent: #00d4ff;
+    --accent-dim: #0099bb;
+    --bg: #0a0e14;
+    --panel: #111820;
+    --border: #1e2d3d;
+    --text: #c8d8e8;
+    --dim: #5a7080;
+    --green: #00ff88;
+    --red: #ff4060;
+    --warn: #ffaa00;
+  }
+
+  html, body {
+    width: 100%; height: 100dvh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ── Layout ── */
+  #app {
+    display: flex; flex-direction: column;
+    height: 100dvh; gap: 0;
+  }
+
+  /* Title bar */
+  #titlebar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  #titlebar .title { color: var(--accent); font-size: 14px; font-weight: bold; letter-spacing: 2px; }
+  #status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); margin-right: 6px; }
+  #status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  #status-dot.offline { background: var(--red); }
+  #status-text { font-size: 11px; color: var(--dim); }
+
+  /* HUD panels row */
+  #hud-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    flex-shrink: 0;
+    background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .hud-panel {
+    background: var(--panel);
+    padding: 8px 10px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .hud-panel-title {
+    color: var(--accent); font-size: 10px; letter-spacing: 1.5px;
+    text-transform: uppercase; margin-bottom: 2px;
+    border-bottom: 1px solid var(--border); padding-bottom: 3px;
+  }
+  .hud-value { display: flex; justify-content: space-between; align-items: center; }
+  .hud-label { color: var(--dim); font-size: 11px; }
+  .hud-num { color: var(--text); font-size: 12px; min-width: 80px; text-align: right; }
+  .hud-num.accent { color: var(--accent); }
+
+  /* Compass panel */
+  #compass-panel {
+    background: var(--panel);
+    padding: 8px 10px;
+    display: flex; flex-direction: column; gap: 4px;
+    align-items: center;
+  }
+  #compass-panel .hud-panel-title { align-self: stretch; }
+  #compass-svg-wrap {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    flex: 1;
+  }
+  #compass-svg { width: 80px; height: 80px; }
+  #compass-bearing { color: var(--accent); font-size: 18px; font-weight: bold; }
+  #compass-cardinal { color: var(--text); font-size: 12px; }
+  #compass-uncal { color: var(--warn); font-size: 10px; display: none; }
+
+  /* Joystick data panel */
+  #joy-data-panel {
+    background: var(--panel);
+    padding: 8px 10px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+
+  /* Bottom: joystick zone */
+  #joystick-zone {
+    flex: 1;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg);
+    position: relative;
+    min-height: 160px;
+  }
+
+  #joystick-hint {
+    position: absolute;
+    color: var(--dim); font-size: 11px;
+    pointer-events: none;
+    letter-spacing: 1px;
+  }
+
+  /* nipplejs overrides */
+  .nipple .front { background: var(--accent) !important; }
+  .nipple .back  { background: rgba(0,212,255,0.15) !important; border: 2px solid var(--accent-dim) !important; }
+
+  /* Warning banner */
+  #warn-banner {
+    display: none; position: absolute; top: 0; left: 0; right: 0;
+    background: var(--red); color: #fff;
+    text-align: center; padding: 4px; font-size: 12px; z-index: 100;
+  }
+  #warn-banner.visible { display: block; }
+
+  /* Separator bar */
+  .sep { width: 100%; height: 1px; background: var(--border); flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <!-- Title bar -->
+  <div id="titlebar">
+    <span class="title">FARM ROBOT</span>
+    <span>
+      <span id="status-dot"></span>
+      <span id="status-text">OFFLINE</span>
+    </span>
+  </div>
+
+  <!-- HUD row (2×2 grid) -->
+  <div id="hud-row">
+    <!-- Accelerometer -->
+    <div class="hud-panel">
+      <div class="hud-panel-title">ACCELEROMETER</div>
+      <div class="hud-value"><span class="hud-label">X</span><span class="hud-num" id="acc-x">-- m/s²</span></div>
+      <div class="hud-value"><span class="hud-label">Y</span><span class="hud-num" id="acc-y">-- m/s²</span></div>
+      <div class="hud-value"><span class="hud-label">Z</span><span class="hud-num" id="acc-z">-- m/s²</span></div>
+      <div style="margin-top:4px;" class="hud-panel-title">GYROSCOPE</div>
+      <div class="hud-value"><span class="hud-label">X</span><span class="hud-num" id="gyro-x">-- rad/s</span></div>
+      <div class="hud-value"><span class="hud-label">Y</span><span class="hud-num" id="gyro-y">-- rad/s</span></div>
+      <div class="hud-value"><span class="hud-label">Z</span><span class="hud-num" id="gyro-z">-- rad/s</span></div>
+    </div>
+
+    <!-- Compass + Joystick data -->
+    <div style="display:flex;flex-direction:column;gap:1px;background:var(--border);">
+      <div id="compass-panel" class="hud-panel" style="flex:1;">
+        <div class="hud-panel-title" style="align-self:stretch;">COMPASS</div>
+        <div id="compass-svg-wrap">
+          <svg id="compass-svg" viewBox="0 0 100 100">
+            <!-- Outer ring -->
+            <circle cx="50" cy="50" r="46" fill="none" stroke="#1e2d3d" stroke-width="2"/>
+            <!-- Cardinal ticks -->
+            <g stroke="#5a7080" stroke-width="1.5">
+              <line x1="50" y1="6" x2="50" y2="14"/>
+              <line x1="94" y1="50" x2="86" y2="50"/>
+              <line x1="50" y1="94" x2="50" y2="86"/>
+              <line x1="6" y1="50" x2="14" y2="50"/>
+            </g>
+            <!-- Cardinal labels -->
+            <text x="50" y="22" text-anchor="middle" fill="#00d4ff" font-size="10" font-family="Courier New">N</text>
+            <text x="50" y="84" text-anchor="middle" fill="#5a7080" font-size="9" font-family="Courier New">S</text>
+            <text x="82" y="54" text-anchor="middle" fill="#5a7080" font-size="9" font-family="Courier New">E</text>
+            <text x="18" y="54" text-anchor="middle" fill="#5a7080" font-size="9" font-family="Courier New">W</text>
+            <!-- Needle group (rotated by JS) -->
+            <g id="compass-needle" transform="rotate(0,50,50)">
+              <!-- North (red) -->
+              <polygon points="50,16 46,50 54,50" fill="#ff4060"/>
+              <!-- South (dim) -->
+              <polygon points="50,84 46,50 54,50" fill="#1e2d3d"/>
+            </g>
+            <!-- Center dot -->
+            <circle cx="50" cy="50" r="3" fill="#00d4ff"/>
+          </svg>
+          <div id="compass-bearing">---°</div>
+          <div id="compass-cardinal">--</div>
+          <div id="compass-uncal">⚠ UNCALIBRATED</div>
+        </div>
+      </div>
+
+      <div id="joy-data-panel" class="hud-panel">
+        <div class="hud-panel-title">JOYSTICK</div>
+        <div class="hud-value"><span class="hud-label">Force</span><span class="hud-num accent" id="joy-force">0.00</span></div>
+        <div class="hud-value"><span class="hud-label">Linear</span><span class="hud-num" id="joy-linear">+0.00 m/s</span></div>
+        <div class="hud-value"><span class="hud-label">Angular</span><span class="hud-num" id="joy-angular">+0.00 r/s</span></div>
+        <div class="hud-value"><span class="hud-label">Dir</span><span class="hud-num accent" id="joy-dir">--</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Joystick zone -->
+  <div id="joystick-zone">
+    <span id="joystick-hint">TOUCH TO CONTROL</span>
+    <div id="warn-banner">⚠ CONNECTION LOST — ROBOT STOPPED</div>
+  </div>
+</div>
+
+<script src="/nipplejs.min.js"></script>
+<script>
+// ── Config ─────────────────────────────────────────────────
+const WS_URL = `ws://${window.location.hostname}:8889/`;
+const HEARTBEAT_INTERVAL_MS = 500;
+const JOYSTICK_SEND_INTERVAL_MS = 100;  // 10Hz throttle
+const DEADZONE = 0.15;
+
+// MAX_LINEAR_VEL / MAX_ANGULAR_VEL are injected by the server
+// as meta tags or we read them from a global set by SSE/query param.
+// Fallback: 1.0
+const MAX_LINEAR  = parseFloat(document.documentElement.dataset.maxLinear  || "1.0");
+const MAX_ANGULAR = parseFloat(document.documentElement.dataset.maxAngular || "1.0");
+
+// ── State ───────────────────────────────────────────────────
+let ws = null;
+let joystickActive = false;
+let currentLinear  = 0.0;
+let currentAngular = 0.0;
+let currentForce   = 0.0;
+let heartbeatTimer = null;
+let joySendTimer   = null;
+let lastHeartbeatSent = 0;
+
+// ── WebSocket ───────────────────────────────────────────────
+function connect() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    setStatus(true);
+    scheduleHeartbeat();
+    scheduleJoySend();
+  };
+
+  ws.onclose = () => {
+    setStatus(false);
+    clearTimers();
+    // Auto-reconnect after 2s
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+
+  ws.onmessage = (evt) => {
+    try {
+      const msg = JSON.parse(evt.data);
+      if (msg.type === "imu") handleIMU(msg);
+      if (msg.type === "status") handleStatus(msg);
+    } catch(e) {}
+  };
+}
+
+function sendMsg(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+// ── Timers ──────────────────────────────────────────────────
+function scheduleHeartbeat() {
+  heartbeatTimer = setInterval(() => {
+    sendMsg({ type: "heartbeat" });
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+function scheduleJoySend() {
+  joySendTimer = setInterval(() => {
+    if (joystickActive) {
+      sendMsg({ type: "joystick", linear: currentLinear, angular: currentAngular, force: currentForce });
+    }
+  }, JOYSTICK_SEND_INTERVAL_MS);
+}
+
+function clearTimers() {
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  if (joySendTimer)   { clearInterval(joySendTimer);   joySendTimer   = null; }
+}
+
+// ── Status UI ───────────────────────────────────────────────
+function setStatus(online) {
+  const dot  = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  const warn = document.getElementById('warn-banner');
+  if (online) {
+    dot.className = 'online';
+    text.textContent = 'ONLINE';
+    warn.classList.remove('visible');
+  } else {
+    dot.className = 'offline';
+    text.textContent = 'OFFLINE';
+    warn.classList.add('visible');
+  }
+}
+
+// ── IMU HUD update ─────────────────────────────────────────
+function fmt3(v) { return (v >= 0 ? '+' : '') + v.toFixed(3); }
+function fmt2(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
+
+function handleIMU(msg) {
+  if (msg.accel) {
+    document.getElementById('acc-x').textContent = fmt3(msg.accel.x) + ' m/s²';
+    document.getElementById('acc-y').textContent = fmt3(msg.accel.y) + ' m/s²';
+    document.getElementById('acc-z').textContent = fmt3(msg.accel.z) + ' m/s²';
+  }
+  if (msg.gyro) {
+    document.getElementById('gyro-x').textContent = fmt3(msg.gyro.x) + ' r/s';
+    document.getElementById('gyro-y').textContent = fmt3(msg.gyro.y) + ' r/s';
+    document.getElementById('gyro-z').textContent = fmt3(msg.gyro.z) + ' r/s';
+  }
+  if (msg.compass) {
+    const c = msg.compass;
+    const needle = document.getElementById('compass-needle');
+    needle.setAttribute('transform', `rotate(${c.bearing.toFixed(1)},50,50)`);
+    document.getElementById('compass-bearing').textContent = c.bearing.toFixed(1) + '°';
+    document.getElementById('compass-cardinal').textContent = c.cardinal;
+    const uncal = document.getElementById('compass-uncal');
+    uncal.style.display = c.calibrated ? 'none' : 'block';
+  }
+}
+
+function handleStatus(msg) {
+  // Could show serial/imu status if needed
+}
+
+// ── Direction label ─────────────────────────────────────────
+function dirLabel(linear, angular) {
+  const fwd  = linear  >  0.05;
+  const back = linear  < -0.05;
+  const left = angular >  0.05;
+  const right= angular < -0.05;
+  if (!fwd && !back && !left && !right) return '■ STOP';
+  let s = '';
+  if (fwd)  s += '↑';
+  if (back) s += '↓';
+  if (left) s += '←';
+  if (right)s += '→';
+  return s;
+}
+
+// ── Joystick update ─────────────────────────────────────────
+function updateJoyUI() {
+  document.getElementById('joy-force').textContent   = currentForce.toFixed(2);
+  document.getElementById('joy-linear').textContent  = fmt2(currentLinear)  + ' m/s';
+  document.getElementById('joy-angular').textContent = fmt2(currentAngular) + ' r/s';
+  document.getElementById('joy-dir').textContent     = dirLabel(currentLinear, currentAngular);
+}
+
+// ── nipplejs setup ──────────────────────────────────────────
+window.addEventListener('load', () => {
+  const zone = document.getElementById('joystick-zone');
+  const hint = document.getElementById('joystick-hint');
+
+  const manager = nipplejs.create({
+    zone: zone,
+    mode: 'static',
+    position: { left: '50%', top: '50%' },
+    size: 160,
+    color: '#00d4ff',
+    restOpacity: 0.6,
+  });
+
+  manager.on('start', () => {
+    joystickActive = true;
+    hint.style.display = 'none';
+  });
+
+  manager.on('move', (evt, data) => {
+    const force = Math.min(data.force, 1.0);
+    // nipplejs: angle in degrees, 0=right, 90=up (CCW)
+    const angleRad = data.angle.radian;
+    let rawX = Math.cos(angleRad) * force;  // right positive
+    let rawY = Math.sin(angleRad) * force;  // up positive
+
+    if (force < DEADZONE) {
+      currentLinear  = 0.0;
+      currentAngular = 0.0;
+      currentForce   = 0.0;
+    } else {
+      currentLinear  =  rawY * MAX_LINEAR;   // up → forward
+      currentAngular = -rawX * MAX_ANGULAR;  // right → negative angular (Amiga convention)
+      currentForce   = force;
+    }
+    updateJoyUI();
+  });
+
+  manager.on('end', () => {
+    joystickActive = false;
+    currentLinear  = 0.0;
+    currentAngular = 0.0;
+    currentForce   = 0.0;
+    updateJoyUI();
+    // Immediate stop
+    sendMsg({ type: "joystick", linear: 0.0, angular: 0.0, force: 0.0 });
+    hint.style.display = 'block';
+  });
+
+  // Start WebSocket
+  connect();
+});
+</script>
+</body>
+</html>

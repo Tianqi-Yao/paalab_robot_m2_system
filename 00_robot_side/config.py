@@ -49,3 +49,11 @@ LOCAL_DISPLAY: bool = os.environ.get("LOCAL_DISPLAY", "0") == "1"
 
 # ── Key repeat interval (10 Hz) ────────────────────────────
 KEY_REPEAT_INTERVAL: float = float(os.environ.get("KEY_REPEAT_INTERVAL", "0.1"))
+
+# ── Web joystick controller ports ─────────────────────────
+WEB_HTTP_PORT: int = int(os.environ.get("WEB_HTTP_PORT", "8888"))
+WEB_WS_PORT:   int = int(os.environ.get("WEB_WS_PORT",   "8889"))
+
+# ── Maximum velocity limits for web joystick ──────────────
+MAX_LINEAR_VEL:  float = float(os.environ.get("MAX_LINEAR_VEL",  "1.0"))
+MAX_ANGULAR_VEL: float = float(os.environ.get("MAX_ANGULAR_VEL", "1.0"))
