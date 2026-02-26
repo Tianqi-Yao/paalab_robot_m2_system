@@ -201,7 +201,8 @@ pip install pynput opencv-python
 | `CAM2_STREAM_PORT`    | `8081`                     | same               | Camera 2 MJPEG stream port         |
 | `MJPEG_QUALITY`       | `80`                       | same               | JPEG encoding quality (1–100)      |
 | `LOCAL_DISPLAY`       | `0` (off)                  | same               | Set `1` for local preview window   |
-| `CAM2_ENABLED`        | `0` (off)                  | same               | Set `1` to stream a second camera  |
+| `CAM_SELECTION`       | `1`                        | same               | Camera selection: `"1"`, `"2"`, or `"both"` (set by launcher menu) |
+| `DEVICE_IP`           | *(auto-detect)*            | same               | Force cam_demo scripts to connect to a specific OAK-D PoE IP (set by launcher menu) |
 | `WEB_HTTP_PORT`       | `8888`                     | same               | Web joystick HTTP port             |
 | `WEB_WS_PORT`         | `8889`                     | same               | Web joystick WebSocket port        |
 | `MAX_LINEAR_VEL`      | `1.0` m/s                  | same               | Joystick maximum linear velocity   |
@@ -246,8 +247,29 @@ python main.py
 =======================================================
 ```
 
-- Option **4**: starts `robot_receiver.py` + `camera_streamer.py` in parallel. Press `Ctrl+C` to stop both.
+- Option **2**: prompts for camera selection, then starts `local_controller.py` + `Camera_multiple_outputs.py`.
+- Option **4**: prompts for camera selection, then starts `robot_receiver.py` + `camera_streamer.py` in parallel. Press `Ctrl+C` to stop both.
+- Option **5**: prompts for camera selection, then enters the local camera test sub-menu.
 - Option **6**: starts `web_controller.py`. Open `http://<robot-ip>:8888/` on your phone.
+
+**Camera selection prompt (options 2 / 4 / 5):**
+
+```
+────────────────────────────
+  请选择相机 / Select Camera
+────────────────────────────
+  1. 相机 1  (IP: 10.95.76.10)
+  2. 相机 2  (IP: 10.95.76.11)
+  3. 两台相机
+────────────────────────────
+  选择 [1/2/3]:
+```
+
+| Selection | `camera_streamer.py` ports | `DEVICE_IP` injected |
+|-----------|---------------------------|----------------------|
+| 1         | CAM1 → :8080              | `10.95.76.10`        |
+| 2         | CAM2 → :8080              | `10.95.76.11`        |
+| both      | CAM1 → :8080, CAM2 → :8081| *(auto-detect)*      |
 
 ### Web joystick (Mode D)
 
@@ -321,6 +343,9 @@ class DepthAlignSource(FrameSource): ...    # colour + depth side-by-side
 
 ## Local Camera Tests (menu option 5)
 
+Selecting option **5** first shows the camera selection prompt, then enters the sub-menu.
+The chosen camera's IP is injected as `DEVICE_IP` into each demo script.
+
 | Option | Function                                    |
 |--------|---------------------------------------------|
 | 1      | Simple viewer (300×300, CAM_A)              |
@@ -328,6 +353,10 @@ class DepthAlignSource(FrameSource): ...    # colour + depth side-by-side
 | 3      | Multi-output (300×300, CAM_A / B / C)       |
 | 4      | Depth Align demo                            |
 | 5      | YOLO object detection demo                  |
+
+All scripts in `cam_demo/` read `DEVICE_IP` from the environment:
+- If set → connect to that specific OAK-D PoE address.
+- If unset (selection = "both") → depthai auto-detects all devices on the network.
 
 Additional demo scripts are in the `cam_demo/` directory (IMU, feature tracking, etc.).
 
