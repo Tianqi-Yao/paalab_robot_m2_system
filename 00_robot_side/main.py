@@ -127,12 +127,22 @@ def _flush_stdin() -> None:
         pass
 
 
-def run_scripts(cmds: list[list[str]], env_extra: Optional[dict] = None) -> None:
-    """Launch commands as subprocesses and wait until all exit."""
-    procs: list[subprocess.Popen] = []
-    env = {**os.environ, **(env_extra or {})}
+def run_scripts(
+    cmds: list[list[str]],
+    env_extra: Optional[dict] = None,
+    env_list: Optional[list[Optional[dict]]] = None,
+) -> None:
+    """Launch commands as subprocesses and wait until all exit.
 
-    for cmd in cmds:
+    env_list: per-command env overrides (higher priority than env_extra).
+              Length must match cmds; None element means no extra override.
+    """
+    procs: list[subprocess.Popen] = []
+    base_env = {**os.environ, **(env_extra or {})}
+
+    for i, cmd in enumerate(cmds):
+        per = env_list[i] if env_list else None
+        env = {**base_env, **(per or {})}
         logger.info(f"Starting: {cmd[1]}")
         try:
             p = subprocess.Popen(cmd, env=env)
@@ -187,6 +197,8 @@ def run_single_cmd(cmd: list[str], env_extra: Optional[dict] = None) -> None:
 
 
 def run_camera_menu(env_extra: Optional[dict] = None) -> None:
+    from config import CAM1_IP, CAM2_IP
+    cam_sel = (env_extra or {}).get("CAM_SELECTION", "1")
     print_camera_menu()
     while True:
         try:
@@ -205,7 +217,16 @@ def run_camera_menu(env_extra: Optional[dict] = None) -> None:
         item = CAMERA_MENU[choice]
         logger.info(f"Camera test selected: [{choice}] {item['label']}")
         print(f"\n>>> Starting: {item['label']}\n")
-        run_single_cmd(item["cmd"], env_extra=env_extra)
+
+        if cam_sel == "both":
+            cmds = [item["cmd"], item["cmd"]]
+            env_list = [
+                {**(env_extra or {}), "DEVICE_IP": CAM1_IP},
+                {**(env_extra or {}), "DEVICE_IP": CAM2_IP},
+            ]
+            run_scripts(cmds, env_list=env_list)
+        else:
+            run_single_cmd(item["cmd"], env_extra=env_extra)
         print_camera_menu()
 
 
@@ -242,10 +263,27 @@ def main() -> None:
         if choice in ("2", "4"):
             cam_env = ask_camera_selection()
 
-        try:
-            run_scripts(item["cmds"], env_extra=cam_env)
-        except Exception as e:
-            logger.error(f"Launch error: {e}")
+        if choice == "2" and (cam_env or {}).get("CAM_SELECTION") == "both":
+            from config import CAM1_IP, CAM2_IP
+            cmds = [
+                [sys.executable, "local_controller.py"],
+                CAMERA_MULTI_CMD,
+                CAMERA_MULTI_CMD,
+            ]
+            env_list: list[Optional[dict]] = [
+                None,
+                {**(cam_env or {}), "DEVICE_IP": CAM1_IP},
+                {**(cam_env or {}), "DEVICE_IP": CAM2_IP},
+            ]
+            try:
+                run_scripts(cmds, env_list=env_list)
+            except Exception as e:
+                logger.error(f"Launch error: {e}")
+        else:
+            try:
+                run_scripts(item["cmds"], env_extra=cam_env)
+            except Exception as e:
+                logger.error(f"Launch error: {e}")
 
         _flush_stdin()
         print_menu()

@@ -247,9 +247,9 @@ python main.py
 =======================================================
 ```
 
-- Option **2**: prompts for camera selection, then starts `local_controller.py` + `Camera_multiple_outputs.py`.
+- Option **2**: prompts for camera selection, then starts `local_controller.py` + `Camera_multiple_outputs.py`. With **both**, opens two `Camera_multiple_outputs.py` windows in parallel (one per camera, each with its own `DEVICE_IP`).
 - Option **4**: prompts for camera selection, then starts `robot_receiver.py` + `camera_streamer.py` in parallel. Press `Ctrl+C` to stop both.
-- Option **5**: prompts for camera selection, then enters the local camera test sub-menu.
+- Option **5**: prompts for camera selection, then enters the local camera test sub-menu. With **both**, any selected demo launches two parallel processes—one for CAM1, one for CAM2.
 - Option **6**: starts `web_controller.py`. Open `http://<robot-ip>:8888/` on your phone.
 
 **Camera selection prompt (options 2 / 4 / 5):**
@@ -265,11 +265,11 @@ python main.py
   选择 [1/2/3]:
 ```
 
-| Selection | `camera_streamer.py` ports | `DEVICE_IP` injected |
-|-----------|---------------------------|----------------------|
-| 1         | CAM1 → :8080              | `10.95.76.10`        |
-| 2         | CAM2 → :8080              | `10.95.76.11`        |
-| both      | CAM1 → :8080, CAM2 → :8081| *(auto-detect)*      |
+| Selection | `camera_streamer.py` ports  | `DEVICE_IP` injected                              |
+|-----------|-----------------------------|---------------------------------------------------|
+| 1         | CAM1 → :8080                | `10.95.76.10`                                     |
+| 2         | CAM2 → :8080                | `10.95.76.11`                                     |
+| both      | CAM1 → :8080, CAM2 → :8081 | per-process: CAM1_IP to process 1, CAM2_IP to process 2 |
 
 ### Web joystick (Mode D)
 
@@ -355,8 +355,8 @@ The chosen camera's IP is injected as `DEVICE_IP` into each demo script.
 | 5      | YOLO object detection demo                  |
 
 All scripts in `cam_demo/` read `DEVICE_IP` from the environment:
-- If set → connect to that specific OAK-D PoE address.
-- If unset (selection = "both") → depthai auto-detects all devices on the network.
+- Single camera (1 or 2) → one process launched with `DEVICE_IP` set to the chosen camera's IP.
+- **Both cameras** → two processes launched in parallel; each receives its own `DEVICE_IP` (`CAM1_IP` / `CAM2_IP`), producing two independent display windows.
 
 Additional demo scripts are in the `cam_demo/` directory (IMU, feature tracking, etc.).
 
