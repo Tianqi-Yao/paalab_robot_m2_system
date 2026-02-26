@@ -1,17 +1,17 @@
 """
-Web Joystick Controller — HTTP 静态文件 + WebSocket + IMU + 串口速度输出
+Web Joystick Controller — HTTP static files + WebSocket + IMU + serial velocity output
 
-架构：
+Architecture:
   Thread-1: asyncio event loop
     ├─ websockets.serve() :WEB_WS_PORT  → _ws_handler()
-    │    接收摇杆命令 → serial.write("V{linear:.2f},{angular:.2f}\n")
-    ├─ _imu_broadcast_loop(): 20Hz 推送 IMU + 罗盘
-    └─ _watchdog_loop(): 2s 无心跳 → 发送 "V0.00,0.00\n" 急停
-  Thread-2: ThreadingHTTPServer :WEB_HTTP_PORT（守护线程，服务静态文件）
-  Thread-3: IMUReader（depthai 守护线程，读取 OAK-D IMU）
+    │    receives joystick commands → serial.write("V{linear:.2f},{angular:.2f}\n")
+    ├─ _imu_broadcast_loop(): pushes IMU + compass at 20 Hz
+    └─ _watchdog_loop(): 2 s without heartbeat → sends "V0.00,0.00\n" emergency stop
+  Thread-2: ThreadingHTTPServer :WEB_HTTP_PORT (daemon, serves static files)
+  Thread-3: IMUReader (depthai daemon thread, reads OAK-D IMU)
 
-串口操作直接使用 serial.Serial（不经过 SerialWriter 白名单），
-与 robot_receiver.py / local_controller.py 互斥（不可同时持有同一串口）。
+Serial port is opened directly via serial.Serial (bypasses SerialWriter whitelist).
+Mutually exclusive with robot_receiver.py / local_controller.py (same serial port).
 
 Usage:
     cd m2_system/00_robot_side
@@ -51,10 +51,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── 静态文件目录 ─────────────────────────────────────────
+# ── Static files directory ────────────────────────────────
 STATIC_DIR = Path(__file__).parent / "web_static"
 
-# ── IMU 数据存储（线程安全用 lock） ──────────────────────
+# ── IMU data store (thread-safe via lock) ─────────────────
 _imu_lock = threading.Lock()
 _imu_data: dict = {
     "accel": {"x": 0.0, "y": 0.0, "z": 0.0},
@@ -66,13 +66,15 @@ _imu_data: dict = {
     },
     "ts": 0.0,
 }
-_imu_available = False  # 是否成功连接 depthai
+_imu_available = False  # True once depthai pipeline is running
 
 
-# ── 四元数 → 罗盘方位角 ───────────────────────────────────
+# ── Quaternion → compass bearing ──────────────────────────
 def quaternion_to_compass(real: float, i: float, j: float, k: float) -> tuple[float, str]:
-    """BNO085 ROTATION_VECTOR(NED) → 方位角 [0, 360)，0=磁北，顺时针。
-    NED/ENU 坐标系可通过 COORD_SYSTEM 环境变量切换（默认 NED）。
+    """Convert BNO085 ROTATION_VECTOR quaternion to compass bearing [0, 360).
+
+    0 = magnetic north, clockwise positive.
+    Coordinate system selectable via COORD_SYSTEM env var (default: NED).
     """
     coord = os.environ.get("COORD_SYSTEM", "NED").upper()
     if coord == "ENU":
@@ -87,9 +89,9 @@ def quaternion_to_compass(real: float, i: float, j: float, k: float) -> tuple[fl
     return bearing, cardinal
 
 
-# ── IMU 读取线程（depthai OAK-D） ─────────────────────────
+# ── IMU reader thread (depthai OAK-D) ────────────────────
 class IMUReader(threading.Thread):
-    """后台线程：持续从 OAK-D 读取 IMU 数据并更新 _imu_data。"""
+    """Daemon thread: continuously reads IMU packets from OAK-D and updates _imu_data."""
 
     def __init__(self) -> None:
         super().__init__(name="IMUReader", daemon=True)
@@ -99,7 +101,7 @@ class IMUReader(threading.Thread):
         try:
             import depthai as dai
         except ImportError:
-            logger.warning("depthai 未安装，IMU 功能不可用，HUD 将显示零值")
+            logger.warning("depthai not installed — IMU unavailable, HUD will show zeros")
             return
 
         try:
@@ -114,7 +116,7 @@ class IMUReader(threading.Thread):
                 imu_queue = imu_node.out.createOutputQueue(maxSize=50, blocking=False)
                 pipeline.start()
                 _imu_available = True
-                logger.info("IMUReader: depthai IMU 已启动")
+                logger.info("IMUReader: depthai IMU pipeline started")
 
                 while pipeline.isRunning():
                     try:
@@ -124,10 +126,10 @@ class IMUReader(threading.Thread):
                         for pkt in imu_data_pkt.packets:
                             self._process_packet(pkt)
                     except Exception as e:
-                        logger.error(f"IMUReader: 读取数据包失败: {e}")
+                        logger.error(f"IMUReader: failed to read packet: {e}")
 
         except Exception as e:
-            logger.error(f"IMUReader: depthai 管线启动失败: {e}")
+            logger.error(f"IMUReader: depthai pipeline failed to start: {e}")
             _imu_available = False
 
     def _process_packet(self, pkt) -> None:
@@ -137,7 +139,7 @@ class IMUReader(threading.Thread):
             gyro  = pkt.gyroscope
             rot   = pkt.rotationVector
 
-            # 检测是否已校准（四元数全零视为未校准）
+            # All-zero quaternion means sensor is uncalibrated
             w, xi, yj, zk = rot.real, rot.i, rot.j, rot.k
             calibrated = not (w == 0.0 and xi == 0.0 and yj == 0.0 and zk == 0.0)
             bearing, cardinal = quaternion_to_compass(w, xi, yj, zk) if calibrated else (0.0, "N")
@@ -155,18 +157,18 @@ class IMUReader(threading.Thread):
                     "ts": time.time(),
                 }
         except Exception as e:
-            logger.error(f"IMUReader: 处理数据包异常: {e}")
+            logger.error(f"IMUReader: packet processing error: {e}")
 
 
-# ── HTTP 静态文件服务 ─────────────────────────────────────
+# ── HTTP static file server ───────────────────────────────
 class StaticFileHandler(SimpleHTTPRequestHandler):
-    """从 STATIC_DIR 提供静态文件，注入 MAX_LINEAR/MAX_ANGULAR 到 HTML meta。"""
+    """Serves files from STATIC_DIR; injects MAX_LINEAR/MAX_ANGULAR into index.html."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
     def do_GET(self):
-        # 对 index.html 注入速度配置
+        # Inject velocity config into index.html at request time
         if self.path in ('/', '/index.html'):
             self._serve_index()
         else:
@@ -176,7 +178,7 @@ class StaticFileHandler(SimpleHTTPRequestHandler):
         index_path = STATIC_DIR / "index.html"
         try:
             content = index_path.read_text(encoding="utf-8")
-            # 在 <html> 标签注入 data 属性，供 JS 读取
+            # Inject data attributes into <html> tag so JS can read them
             content = content.replace(
                 '<html lang="en">',
                 f'<html lang="en" data-max-linear="{MAX_LINEAR_VEL}" data-max-angular="{MAX_ANGULAR_VEL}">'
@@ -188,7 +190,7 @@ class StaticFileHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(encoded)
         except Exception as e:
-            logger.error(f"HTTP: 服务 index.html 失败: {e}")
+            logger.error(f"HTTP: failed to serve index.html: {e}")
             self.send_error(500)
 
     def log_message(self, fmt, *args):
@@ -196,16 +198,16 @@ class StaticFileHandler(SimpleHTTPRequestHandler):
 
 
 def _start_http_server() -> None:
-    """在守护线程中启动 ThreadingHTTPServer。"""
+    """Start ThreadingHTTPServer in a daemon thread."""
     server = ThreadingHTTPServer(("0.0.0.0", WEB_HTTP_PORT), StaticFileHandler)
     t = threading.Thread(target=server.serve_forever, name="HTTPServer", daemon=True)
     t.start()
-    logger.info(f"HTTP 静态文件服务已启动：http://0.0.0.0:{WEB_HTTP_PORT}/")
+    logger.info(f"HTTP server started: http://0.0.0.0:{WEB_HTTP_PORT}/")
 
 
-# ── WebSocket 服务 ────────────────────────────────────────
+# ── WebSocket server ──────────────────────────────────────
 class WebController:
-    """管理 WebSocket 连接、串口输出和看门狗。"""
+    """Manages WebSocket connections, serial velocity output, and watchdog."""
 
     def __init__(self) -> None:
         self._ser: serial.Serial | None = None
@@ -221,42 +223,42 @@ class WebController:
         try:
             self._ser = serial.Serial(FEATHER_PORT, SERIAL_BAUD, timeout=SERIAL_TIMEOUT)
             self._serial_ok = True
-            logger.info(f"串口已打开: {FEATHER_PORT} @ {SERIAL_BAUD} baud")
+            logger.info(f"Serial port opened: {FEATHER_PORT} @ {SERIAL_BAUD} baud")
         except serial.SerialException as e:
-            logger.error(f"串口打开失败 [{FEATHER_PORT}]: {e}")
+            logger.error(f"Failed to open serial port [{FEATHER_PORT}]: {e}")
             self._serial_ok = False
 
     def close_serial(self) -> None:
         with self._ser_lock:
             if self._ser and self._ser.is_open:
                 self._ser.close()
-                logger.info("串口已关闭")
+                logger.info("Serial port closed")
 
     def _send_velocity(self, linear: float, angular: float) -> None:
-        """向 Feather M4 发送直接速度命令 V{linear:.2f},{angular:.2f}\n"""
+        """Send direct velocity command V{linear:.2f},{angular:.2f}\\n to Feather M4."""
         cmd = f"V{linear:.2f},{angular:.2f}\n".encode()
         with self._ser_lock:
             if self._ser is None or not self._ser.is_open:
-                logger.warning("串口未打开，无法发送速度命令")
+                logger.warning("Serial port not open, cannot send velocity command")
                 return
             try:
                 self._ser.write(cmd)
-                logger.debug(f"串口发送: {cmd!r}")
+                logger.debug(f"Serial write: {cmd!r}")
             except serial.SerialException as e:
-                logger.error(f"串口写入失败: {e}")
+                logger.error(f"Serial write failed: {e}")
                 self._serial_ok = False
 
-    # ── WebSocket 处理器 ──────────────────────────────────
+    # ── WebSocket handler ─────────────────────────────────
     async def _ws_handler(self, websocket) -> None:
         async with self._clients_lock:
             self._clients.add(websocket)
-        logger.info(f"WebSocket 客户端已连接: {websocket.remote_address}")
+        logger.info(f"WebSocket client connected: {websocket.remote_address}")
         try:
             async for raw in websocket:
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
-                    logger.warning(f"WebSocket: 无效 JSON: {raw!r}")
+                    logger.warning(f"WebSocket: invalid JSON: {raw!r}")
                     continue
 
                 msg_type = msg.get("type")
@@ -265,32 +267,32 @@ class WebController:
                     self._last_heartbeat = time.time()
 
                 elif msg_type == "joystick":
-                    self._last_heartbeat = time.time()  # 摇杆消息也刷新心跳
+                    self._last_heartbeat = time.time()  # joystick messages also reset watchdog
                     try:
                         linear  = float(msg.get("linear",  0.0))
                         angular = float(msg.get("angular", 0.0))
-                        # 钳位到速度限制
+                        # Clamp to configured velocity limits
                         linear  = max(-MAX_LINEAR_VEL,  min(MAX_LINEAR_VEL,  linear))
                         angular = max(-MAX_ANGULAR_VEL, min(MAX_ANGULAR_VEL, angular))
                         self._send_velocity(linear, angular)
                     except (TypeError, ValueError) as e:
-                        logger.warning(f"WebSocket: 摇杆消息格式错误: {e}")
+                        logger.warning(f"WebSocket: malformed joystick message: {e}")
 
         except websockets.exceptions.ConnectionClosedError:
             pass
         except Exception as e:
-            logger.error(f"WebSocket 处理器异常: {e}")
+            logger.error(f"WebSocket handler error: {e}")
         finally:
             async with self._clients_lock:
                 self._clients.discard(websocket)
-            logger.info(f"WebSocket 客户端已断开: {websocket.remote_address}")
-            # 客户端断开时立即发送急停
+            logger.info(f"WebSocket client disconnected: {websocket.remote_address}")
+            # Send emergency stop immediately on disconnect
             self._send_velocity(0.0, 0.0)
 
-    # ── IMU 广播循环（20Hz） ──────────────────────────────
+    # ── IMU broadcast loop (20 Hz) ────────────────────────
     async def _imu_broadcast_loop(self) -> None:
         while True:
-            await asyncio.sleep(0.05)  # 20Hz
+            await asyncio.sleep(0.05)  # 20 Hz
             with _imu_lock:
                 data = dict(_imu_data)
             msg = json.dumps({
@@ -314,18 +316,18 @@ class WebController:
                 async with self._clients_lock:
                     self._clients -= dead
 
-    # ── 看门狗循环 ────────────────────────────────────────
+    # ── Watchdog loop ─────────────────────────────────────
     async def _watchdog_loop(self) -> None:
         while True:
             await asyncio.sleep(0.5)
             elapsed = time.time() - self._last_heartbeat
             if elapsed > WATCHDOG_TIMEOUT:
-                logger.warning(f"看门狗触发！{elapsed:.1f}s 未收到心跳，发送急停")
+                logger.warning(f"Watchdog triggered! No heartbeat for {elapsed:.1f}s — sending emergency stop")
                 self._send_velocity(0.0, 0.0)
-                # 重置计时，避免连续急停刷屏
+                # Reset timer to avoid flooding logs with repeated stop commands
                 self._last_heartbeat = time.time()
 
-    # ── 状态广播（低频） ──────────────────────────────────
+    # ── Status broadcast loop (low frequency) ─────────────
     async def _status_broadcast_loop(self) -> None:
         while True:
             await asyncio.sleep(2.0)
@@ -343,7 +345,7 @@ class WebController:
                 except Exception:
                     pass
 
-    # ── 主入口 ────────────────────────────────────────────
+    # ── Main entry ────────────────────────────────────────
     async def serve(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._last_heartbeat = time.time()
@@ -355,7 +357,7 @@ class WebController:
             ping_interval=20,
             ping_timeout=10,
         ):
-            logger.info(f"WebSocket 服务已启动：ws://0.0.0.0:{WEB_WS_PORT}/")
+            logger.info(f"WebSocket server started: ws://0.0.0.0:{WEB_WS_PORT}/")
             await asyncio.gather(
                 self._imu_broadcast_loop(),
                 self._watchdog_loop(),
@@ -363,28 +365,28 @@ class WebController:
             )
 
 
-# ── 主程序入口 ────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────
 def main() -> None:
     logger.info("=" * 50)
-    logger.info("Web Joystick Controller 启动中...")
-    logger.info(f"  HTTP 端口: {WEB_HTTP_PORT}")
-    logger.info(f"  WS   端口: {WEB_WS_PORT}")
-    logger.info(f"  串口设备: {FEATHER_PORT}")
-    logger.info(f"  速度上限: linear={MAX_LINEAR_VEL} m/s, angular={MAX_ANGULAR_VEL} rad/s")
-    logger.info(f"  看门狗:   {WATCHDOG_TIMEOUT}s")
+    logger.info("Web Joystick Controller starting...")
+    logger.info(f"  HTTP port : {WEB_HTTP_PORT}")
+    logger.info(f"  WS   port : {WEB_WS_PORT}")
+    logger.info(f"  Serial    : {FEATHER_PORT}")
+    logger.info(f"  Max vel   : linear={MAX_LINEAR_VEL} m/s, angular={MAX_ANGULAR_VEL} rad/s")
+    logger.info(f"  Watchdog  : {WATCHDOG_TIMEOUT}s")
     logger.info("=" * 50)
 
     controller = WebController()
     controller.open_serial()
 
-    # 启动 HTTP 静态文件服务（守护线程）
+    # Start HTTP static file server (daemon thread)
     _start_http_server()
 
-    # 启动 IMU 读取线程（守护线程）
+    # Start IMU reader thread (daemon thread)
     imu_reader = IMUReader()
     imu_reader.start()
 
-    # 获取本机 IP 供用户访问提示
+    # Resolve local IP for user-facing access hint
     try:
         import socket
         hostname = socket.gethostname()
@@ -392,15 +394,15 @@ def main() -> None:
     except Exception:
         local_ip = "localhost"
 
-    logger.info(f"手机访问：http://{local_ip}:{WEB_HTTP_PORT}/")
+    logger.info(f"Open on phone: http://{local_ip}:{WEB_HTTP_PORT}/")
 
     try:
         asyncio.run(controller.serve())
     except KeyboardInterrupt:
-        logger.info("用户中断，正在关闭...")
+        logger.info("Interrupted by user, shutting down...")
     finally:
         controller.close_serial()
-        logger.info("Web Controller 已停止")
+        logger.info("Web Controller stopped")
 
 
 if __name__ == "__main__":
