@@ -228,7 +228,7 @@ def run_camera_menu(env_extra: Optional[dict] = None) -> None:
         else:
             run_single_cmd(item["cmd"], env_extra=env_extra)
         print("  Waiting for cameras to release...")
-        time.sleep(2.0)
+        time.sleep(5.0)
         print_camera_menu()
 
 

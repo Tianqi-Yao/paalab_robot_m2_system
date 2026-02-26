@@ -92,7 +92,11 @@
   #compass-svg { width: 80px; height: 80px; }
   #compass-bearing { color: var(--accent); font-size: 18px; font-weight: bold; }
   #compass-cardinal { color: var(--text); font-size: 12px; }
-  #compass-uncal { color: var(--warn); font-size: 10px; display: none; }
+  #compass-accuracy { font-size: 10px; letter-spacing: 0.5px; }
+  #compass-accuracy.acc-0 { color: var(--red); }
+  #compass-accuracy.acc-1 { color: var(--warn); }
+  #compass-accuracy.acc-2 { color: var(--green); }
+  #compass-accuracy.acc-3 { color: var(--green); text-shadow: 0 0 4px var(--green); }
 
   /* Joystick data panel */
   #joy-data-panel {
@@ -191,7 +195,7 @@
           </svg>
           <div id="compass-bearing">---°</div>
           <div id="compass-cardinal">--</div>
-          <div id="compass-uncal">⚠ UNCALIBRATED</div>
+          <div id="compass-accuracy" class="acc-0">● UNCAL</div>
         </div>
       </div>
 
@@ -329,8 +333,11 @@ function handleIMU(msg) {
     needle.setAttribute('transform', `rotate(${c.bearing.toFixed(1)},50,50)`);
     document.getElementById('compass-bearing').textContent = c.bearing.toFixed(1) + '°';
     document.getElementById('compass-cardinal').textContent = c.cardinal;
-    const uncal = document.getElementById('compass-uncal');
-    uncal.style.display = c.calibrated ? 'none' : 'block';
+    const acc = (c.accuracy !== undefined) ? Math.min(Math.max(c.accuracy, 0), 3) : (c.calibrated ? 3 : 0);
+    const accLabels = ['● UNCAL', '● LOW', '● GOOD', '● PRECISE'];
+    const accEl = document.getElementById('compass-accuracy');
+    accEl.textContent = accLabels[acc];
+    accEl.className = `acc-${acc}`;
   }
 }
 

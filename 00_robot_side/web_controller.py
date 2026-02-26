@@ -140,9 +140,13 @@ class IMUReader(threading.Thread):
             gyro  = pkt.gyroscope
             rot   = pkt.rotationVector
 
-            # All-zero quaternion means sensor is uncalibrated
             w, xi, yj, zk = rot.real, rot.i, rot.j, rot.k
-            calibrated = not (w == 0.0 and xi == 0.0 and yj == 0.0 and zk == 0.0)
+            try:
+                accuracy = int(rot.accuracy)  # 0-3: BNO085 calibration accuracy
+            except (AttributeError, TypeError, ValueError):
+                # Fallback: infer from all-zero quaternion check
+                accuracy = 0 if (w == 0.0 and xi == 0.0 and yj == 0.0 and zk == 0.0) else 3
+            calibrated = accuracy >= 2
             bearing, cardinal = quaternion_to_compass(w, xi, yj, zk) if calibrated else (0.0, "N")
 
             with _imu_lock:
@@ -153,6 +157,7 @@ class IMUReader(threading.Thread):
                         "bearing": bearing,
                         "cardinal": cardinal,
                         "calibrated": calibrated,
+                        "accuracy": accuracy,
                         "quat": {"w": w, "x": xi, "y": yj, "z": zk},
                     },
                     "ts": time.time(),
