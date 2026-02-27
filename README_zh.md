@@ -49,7 +49,7 @@ m2_system/
 │   ├── rtk_reader.py               # RTKReader 守护线程 — NMEA GGA/RMC 解析（Emlid RS+）
 │   ├── data_recorder.py            # DataRecorder — IMU+RTK+指令 CSV 写入（浏览器 start/stop）
 │   ├── web_static/
-│   │   ├── index.html              # 单页 HUD（nipplejs 摇杆 + 罗盘 + IMU + RTK 面板 + REC 按钮）
+│   │   ├── index.html              # 单页 HUD（nipplejs 摇杆 + 速度滑块 + 罗盘 + IMU + RTK 面板 + REC 按钮）
 │   │   └── nipplejs.min.js         # nipplejs 本地副本（LAN 无需 CDN）
 │   ├── main.py                     # 交互式启动菜单（推荐入口）
 │   ├── log/                        # 运行日志（自动创建）
@@ -118,7 +118,7 @@ m2_system/
 支持**比例控制**（对角线运动）、实时 IMU / 罗盘 HUD、RTK GPS 面板，以及手动 CSV 数据录制。
 
 ```
-手机浏览器 ──HTTP:8888──► web_static/index.html（摇杆 + IMU + RTK 面板 + REC 按钮）
+手机浏览器 ──HTTP:8888──► web_static/index.html（摇杆 + 速度滑块 + IMU + RTK 面板 + REC 按钮）
           ──WS:8889────► web_controller.py ──串口──► Feather M4 CAN
           ◄─WS:8889───── web_controller.py ◄── OAK-D BNO085 IMU（20 Hz）
                                            ◄── Emlid RS+ RTK GPS（1 Hz）
@@ -128,6 +128,7 @@ m2_system/
 与模式 B 的主要区别：
 - **比例控制**：摇杆直接映射到绝对速度，不再是增量步进
 - **对角线运动**：线速度和角速度同时设定，一条命令完成
+- **速度比例滑块**：拖动 **SPEED** 滑块（10%–100%，默认 50%）可实时缩放摇杆输出——满速过于灵敏时可降低比例以精准操控，纯前端缩放，服务端速度钳位依然生效
 - **IMU HUD**：线加速度（已去除重力分量）、陀螺仪、磁力罗盘实时显示于浏览器
 - **RTK GPS 面板**：实时显示经纬度、高度、定位质量徽章（NO FIX / GPS / DGPS / RTK FIXED / RTK FLOAT）、卫星数、HDOP、速度
 - **CSV 录制**：点击 **● REC** 开始记录，点击 **■ STOP** 关闭文件，每次生成一个带时间戳的文件保存在 `data_log/`
@@ -311,10 +312,18 @@ http://<机器人IP>:8888/
 
 ```
 force < 0.15      → 死区，机器人停止
-摇杆向上          → 前进（linear = +force × MAX_LINEAR_VEL）
+摇杆向上          → 前进（linear = +force × MAX_LINEAR_VEL × 速度比例）
 摇杆右上 45°      → 前进 + 右转（对角线运动）
 松开摇杆          → 立即发送急停
 断开/无心跳 2 秒  → 看门狗触发急停
+```
+
+速度比例滑块（摇杆区上方 SPEED 条）：
+
+```
+范围    : 10% – 100%，步进 10%，默认 50%
+效果    : 同时缩放线速度和角速度后再发送给服务端
+场景    : 精准定位时调低到 20–30%，快速移动时恢复至 100%
 ```
 
 RTK GPS 与数据录制：

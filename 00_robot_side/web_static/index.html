@@ -204,6 +204,26 @@
   #rec-btn.rec-idle    { background: #1e2d3d; color: var(--dim);   border: 1px solid var(--border); }
   #rec-btn.rec-active  { background: #2a0808; color: var(--red);   border: 1px solid var(--red); box-shadow: 0 0 6px rgba(255,64,96,0.3); }
   #rec-filename { color: var(--dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+  /* Speed slider */
+  #speed-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    font-size: 12px; color: var(--dim);
+    font-family: 'Courier New', Courier, monospace;
+  }
+  #speed-label { letter-spacing: 1px; white-space: nowrap; }
+  #speed-slider {
+    flex: 1;
+    accent-color: var(--accent);
+  }
+  #speed-value {
+    min-width: 40px; text-align: right;
+    color: var(--accent); font-weight: bold;
+  }
 </style>
 </head>
 <body>
@@ -325,6 +345,13 @@
     <span id="rec-filename">—</span>
   </div>
 
+  <!-- Speed slider bar -->
+  <div id="speed-bar">
+    <span id="speed-label">SPEED</span>
+    <input type="range" id="speed-slider" min="10" max="100" step="10" value="50">
+    <span id="speed-value">50%</span>
+  </div>
+
   <!-- Joystick zone -->
   <div id="joystick-zone">
     <span id="joystick-hint">TOUCH TO CONTROL</span>
@@ -345,6 +372,9 @@ const DEADZONE = 0.15;
 // Fallback: 1.0
 const MAX_LINEAR  = parseFloat(document.documentElement.dataset.maxLinear  || "1.0");
 const MAX_ANGULAR = parseFloat(document.documentElement.dataset.maxAngular || "1.0");
+
+// ── Speed ratio (前端缩放，默认50%) ─────────────────────────
+let speedRatio = 0.5;
 
 // ── State ───────────────────────────────────────────────────
 let ws = null;
@@ -603,8 +633,8 @@ window.addEventListener('load', () => {
       currentAngular = 0.0;
       currentForce   = 0.0;
     } else {
-      currentLinear  =  rawY * MAX_LINEAR;   // up → forward
-      currentAngular = -rawX * MAX_ANGULAR;  // right → negative angular (Amiga convention)
+      currentLinear  =  rawY * MAX_LINEAR  * speedRatio;   // up → forward
+      currentAngular = -rawX * MAX_ANGULAR * speedRatio;   // right → negative angular (Amiga convention)
       currentForce   = force;
     }
     updateJoyUI();
@@ -638,6 +668,13 @@ window.addEventListener('load', () => {
   recBtn.addEventListener('touchend', (e) => {
     e.preventDefault();
     sendMsg({ type: "toggle_record" });
+  });
+
+  // Speed slider bindings
+  const speedSlider = document.getElementById('speed-slider');
+  speedSlider.addEventListener('input', (e) => {
+    speedRatio = parseInt(e.target.value) / 100;
+    document.getElementById('speed-value').textContent = e.target.value + '%';
   });
 
   // Start WebSocket

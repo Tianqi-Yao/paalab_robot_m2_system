@@ -51,7 +51,7 @@ m2_system/
 │   ├── rtk_reader.py               # RTKReader daemon thread — NMEA GGA/RMC parser (Emlid RS+)
 │   ├── data_recorder.py            # DataRecorder — IMU+RTK+cmd CSV writer (start/stop via browser)
 │   ├── web_static/
-│   │   ├── index.html              # Single-page HUD (nipplejs joystick + compass + IMU + RTK panel + REC button)
+│   │   ├── index.html              # Single-page HUD (nipplejs joystick + speed slider + compass + IMU + RTK panel + REC button)
 │   │   └── nipplejs.min.js         # nipplejs local copy (no CDN required on LAN)
 │   ├── main.py                     # Interactive launcher menu (recommended entry point)
 │   ├── log/                        # Runtime logs (auto-created)
@@ -123,7 +123,7 @@ Provides proportional joystick input (diagonal motion supported), a live IMU / c
 RTK GPS display, and manual CSV data recording.
 
 ```
-Phone browser ──HTTP:8888──► web_static/index.html   (nipplejs joystick + IMU HUD + RTK + REC)
+Phone browser ──HTTP:8888──► web_static/index.html   (nipplejs joystick + speed slider + IMU HUD + RTK + REC)
               ──WS:8889────► web_controller.py ──serial──► Feather M4 CAN
               ◄─WS:8889───── web_controller.py ◄── OAK-D BNO085 IMU (20 Hz)
                                                ◄── Emlid RS+ RTK GPS  (1 Hz)
@@ -133,6 +133,7 @@ Phone browser ──HTTP:8888──► web_static/index.html   (nipplejs joystic
 Key differences from Mode B:
 - **Proportional control**: joystick maps directly to absolute speed values — no incremental steps.
 - **Diagonal motion**: linear and angular velocity set simultaneously in a single command.
+- **Speed ratio slider**: drag the **SPEED** slider (10%–100%, default 50%) to scale joystick output in real time — useful when full speed feels too sensitive for fine manoeuvring. Scaling is purely front-end; the server-side velocity clamp still applies.
 - **IMU HUD**: linear acceleration (gravity-compensated), gyroscope, and magnetic compass rendered in the browser.
 - **RTK GPS panel**: live lat/lon/alt, fix quality badge (NO FIX / GPS / DGPS / RTK FIXED / RTK FLOAT), satellite count, HDOP, speed.
 - **CSV recording**: tap **● REC** in the browser to start logging; tap **■ STOP** to close the file. Each recording session creates a timestamped file in `data_log/`.
@@ -316,10 +317,18 @@ The joystick maps to proportional speed:
 
 ```
 force < 0.15              → dead zone, robot stops
-joystick up               → forward  (linear = +force × MAX_LINEAR_VEL)
+joystick up               → forward  (linear = +force × MAX_LINEAR_VEL × speed_ratio)
 joystick right + up       → forward + turn right (diagonal motion)
 release joystick          → immediate stop
 disconnect / no heartbeat → watchdog stops robot after 2 s
+```
+
+Speed ratio slider (SPEED bar, above joystick zone):
+
+```
+range    : 10% – 100%, step 10%, default 50%
+effect   : scales both linear and angular output before sending to server
+use case : reduce to 20–30% for precise positioning; increase to 100% for fast travel
 ```
 
 RTK GPS and data recording:
