@@ -135,6 +135,21 @@
 
   /* Separator bar */
   .sep { width: 100%; height: 1px; background: var(--border); flex-shrink: 0; }
+
+  /* State toggle button */
+  #state-btn {
+    width: 100%;
+    padding: 10px 12px;
+    border: none; outline: none;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px; font-weight: bold; letter-spacing: 2px;
+    cursor: pointer; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    transition: background 0.2s;
+  }
+  #state-btn.state-ready  { background: #1a0a0a; color: var(--red);   border-bottom: 2px solid var(--red); }
+  #state-btn.state-active { background: #0a1a0e; color: var(--green); border-bottom: 2px solid var(--green); box-shadow: 0 0 8px rgba(0,255,136,0.2); }
+  #state-btn:disabled     { opacity: 0.4; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -148,6 +163,12 @@
       <span id="status-text">OFFLINE</span>
     </span>
   </div>
+
+  <!-- State toggle button -->
+  <button id="state-btn" class="state-ready" disabled>
+    <span id="state-indicator">●</span>
+    <span id="state-label">AUTO_READY — TAP TO ACTIVATE</span>
+  </button>
 
   <!-- HUD row (2×2 grid) -->
   <div id="hud-row">
@@ -240,6 +261,27 @@ let heartbeatTimer = null;
 let joySendTimer   = null;
 let lastHeartbeatSent = 0;
 
+// ── State machine (client-side tracking) ────────────────────
+let controlStateActive = false;  // false = AUTO_READY, true = AUTO_ACTIVE
+
+function toggleControlState() {
+  sendMsg({ type: "toggle_state" });
+  controlStateActive = !controlStateActive;
+  updateStateBtn();
+}
+
+function updateStateBtn() {
+  const btn = document.getElementById('state-btn');
+  const lbl = document.getElementById('state-label');
+  if (controlStateActive) {
+    btn.className = 'state-active';
+    lbl.textContent = 'AUTO_ACTIVE — TAP TO DEACTIVATE';
+  } else {
+    btn.className = 'state-ready';
+    lbl.textContent = 'AUTO_READY — TAP TO ACTIVATE';
+  }
+}
+
 // ── WebSocket ───────────────────────────────────────────────
 function connect() {
   ws = new WebSocket(WS_URL);
@@ -301,14 +343,20 @@ function setStatus(online) {
   const dot  = document.getElementById('status-dot');
   const text = document.getElementById('status-text');
   const warn = document.getElementById('warn-banner');
+  const btn  = document.getElementById('state-btn');
   if (online) {
     dot.className = 'online';
     text.textContent = 'ONLINE';
     warn.classList.remove('visible');
+    btn.disabled = false;
   } else {
     dot.className = 'offline';
     text.textContent = 'OFFLINE';
     warn.classList.add('visible');
+    btn.disabled = true;
+    // 断线后重置本地状态（机器人会因看门狗停止并回到 AUTO_READY）
+    controlStateActive = false;
+    updateStateBtn();
   }
 }
 
@@ -415,6 +463,15 @@ window.addEventListener('load', () => {
     // Immediate stop
     sendMsg({ type: "joystick", linear: 0.0, angular: 0.0, force: 0.0 });
     hint.style.display = 'block';
+  });
+
+  // State toggle button bindings
+  const stateBtn = document.getElementById('state-btn');
+  stateBtn.addEventListener('click', toggleControlState);
+  // 触摸设备防双触
+  stateBtn.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    toggleControlState();
   });
 
   // Start WebSocket

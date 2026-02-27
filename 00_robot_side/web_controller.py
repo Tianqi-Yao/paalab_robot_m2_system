@@ -254,6 +254,19 @@ class WebController:
                 logger.error(f"Serial write failed: {e}")
                 self._serial_ok = False
 
+    def _send_raw(self, data: bytes) -> None:
+        """Send raw bytes directly to serial port (e.g. state toggle '\\r')."""
+        with self._ser_lock:
+            if self._ser is None or not self._ser.is_open:
+                logger.warning("Serial port not open, cannot send raw command")
+                return
+            try:
+                self._ser.write(data)
+                logger.debug(f"Serial write (raw): {data!r}")
+            except serial.SerialException as e:
+                logger.error(f"Serial raw write failed: {e}")
+                self._serial_ok = False
+
     # ── WebSocket handler ─────────────────────────────────
     async def _ws_handler(self, websocket) -> None:
         async with self._clients_lock:
@@ -283,6 +296,11 @@ class WebController:
                         self._send_velocity(linear, angular)
                     except (TypeError, ValueError) as e:
                         logger.warning(f"WebSocket: malformed joystick message: {e}")
+
+                elif msg_type == "toggle_state":
+                    self._last_heartbeat = time.time()
+                    self._send_raw(b"\r")
+                    logger.info("WebSocket: state toggle command sent (\\r)")
 
         except websockets.exceptions.ConnectionClosedError:
             pass
