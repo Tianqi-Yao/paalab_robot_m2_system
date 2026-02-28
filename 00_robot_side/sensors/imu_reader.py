@@ -1,15 +1,15 @@
 """
 IMU Reader — OAK-D BNO085 via depthai
 
-提供模块级全局数据存储（线程安全），供 web_controller 和 nav_engine 访问。
-
 公共接口：
-    imu_lock    : threading.Lock
-    imu_data    : dict — 最新 IMU 快照
-    imu_available: bool — depthai pipeline 启动后置 True
+    IMUReader(threading.Thread, daemon=True)
+        .get_data() -> dict   — 线程安全获取最新 IMU 快照（对齐 RTKReader 接口）
+        .is_available -> bool  — depthai pipeline 启动后置 True
 
     quaternion_to_compass(real, i, j, k) -> (bearing, cardinal)
-    IMUReader(threading.Thread, daemon=True)
+
+    # 向后兼容的模块级全局（已废弃，优先使用 IMUReader.get_data()）
+    imu_lock, imu_data, imu_available
 """
 
 import logging
@@ -59,10 +59,23 @@ def quaternion_to_compass(real: float, i: float, j: float, k: float) -> tuple[fl
 
 # ── IMU reader thread (depthai OAK-D) ────────────────────
 class IMUReader(threading.Thread):
-    """Daemon thread: continuously reads IMU packets from OAK-D and updates module-level imu_data."""
+    """Daemon thread: continuously reads IMU packets from OAK-D and updates module-level imu_data.
+
+    优先使用 get_data() / is_available 属性访问数据，而非直接读取模块级全局变量。
+    """
 
     def __init__(self) -> None:
         super().__init__(name="IMUReader", daemon=True)
+
+    @property
+    def is_available(self) -> bool:
+        """depthai pipeline 是否成功启动。"""
+        return imu_available
+
+    def get_data(self) -> dict:
+        """线程安全地返回最新 IMU 快照（对齐 RTKReader.get_data() 接口）。"""
+        with imu_lock:
+            return dict(imu_data)
 
     def run(self) -> None:
         global imu_available

@@ -1,0 +1,8 @@
+# 远程端依赖（01_remote_side）
+# 安装：pip install -r requirements.txt
+
+# 键盘监听（远程控制）
+pynput>=1.7
+
+# 视频流接收（远程查看 MJPEG 视频流）
+opencv-python>=4.8

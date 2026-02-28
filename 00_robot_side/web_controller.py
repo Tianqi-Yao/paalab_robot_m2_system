@@ -38,8 +38,7 @@ from config import (
     DATA_LOG_DIR,
 )
 from sensors.rtk_reader import RTKReader
-from sensors.imu_reader import IMUReader
-import sensors.imu_reader as _imu_mod
+from sensors.imu_reader import IMUReader, imu_lock, imu_data, imu_available
 from data_recorder import DataRecorder
 from navigation.nav_engine import NavigationEngine, NavMode, FilterMode
 
@@ -58,6 +57,9 @@ logger = logging.getLogger(__name__)
 
 # ── Static files directory ────────────────────────────────
 STATIC_DIR = Path(__file__).parent / "web_static"
+
+# ── IMU reader (global, started in main()) ────────────────
+_imu_reader: IMUReader | None = None
 
 # ── RTK reader (global, started in main()) ────────────────
 _rtk_reader: RTKReader | None = None
@@ -428,14 +430,15 @@ class WebController:
     async def _imu_broadcast_loop(self) -> None:
         while True:
             await asyncio.sleep(0.05)  # 20 Hz
-            with _imu_mod.imu_lock:
-                data = dict(_imu_mod.imu_data)
+            if _imu_reader is None:
+                continue
+            data = _imu_reader.get_data()
             msg = json.dumps({
                 "type": "imu",
-                "ts":    data["ts"],
-                "accel": data["accel"],
-                "gyro":  data["gyro"],
-                "compass": data["compass"],
+                "ts":    data.get("ts"),
+                "accel": data.get("accel"),
+                "gyro":  data.get("gyro"),
+                "compass": data.get("compass"),
             })
             async with self._clients_lock:
                 clients = set(self._clients)
@@ -510,8 +513,7 @@ class WebController:
             await asyncio.sleep(0.2)  # 5 Hz
             if _data_recorder is None or not _data_recorder.is_recording:
                 continue
-            with _imu_mod.imu_lock:
-                imu_snap = dict(_imu_mod.imu_data)
+            imu_snap = _imu_reader.get_data() if _imu_reader is not None else {}
             rtk_snap = _rtk_reader.get_data() if _rtk_reader is not None else {}
             with _vel_lock:
                 linear  = _last_linear
@@ -523,14 +525,15 @@ class WebController:
         while True:
             await asyncio.sleep(2.0)
             rtk_ok    = _rtk_reader.is_available if _rtk_reader is not None else False
+            imu_ok    = _imu_reader.is_available if _imu_reader is not None else False
             recording = _data_recorder.is_recording if _data_recorder is not None else False
             msg = json.dumps({
                 "type":       "status",
                 "serial_ok":  self._serial_ok,
-                "imu_ok":     _imu_mod.imu_available,
+                "imu_ok":     imu_ok,
                 "rtk_ok":     rtk_ok,
                 "recording":  recording,
-                "message":    "OK" if (self._serial_ok and _imu_mod.imu_available) else "DEGRADED",
+                "message":    "OK" if (self._serial_ok and imu_ok) else "DEGRADED",
             })
             async with self._clients_lock:
                 clients = set(self._clients)
@@ -573,7 +576,7 @@ class WebController:
 
 # ── Entry point ───────────────────────────────────────────
 def main() -> None:
-    global _rtk_reader, _data_recorder
+    global _imu_reader, _rtk_reader, _data_recorder
 
     logger.info("=" * 50)
     logger.info("Web Joystick Controller starting...")
@@ -593,8 +596,8 @@ def main() -> None:
     _start_http_server()
 
     # Start IMU reader thread (daemon thread)
-    imu_reader = IMUReader()
-    imu_reader.start()
+    _imu_reader = IMUReader()
+    _imu_reader.start()
 
     # Start RTK reader thread (daemon thread)
     if RTK_ENABLED:
